@@ -4,3 +4,4 @@
 *.dylib
 *.exe
 .DS_Store
+/projetoSO

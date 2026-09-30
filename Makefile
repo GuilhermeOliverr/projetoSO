@@ -2,8 +2,8 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -std=c11 -g
 
-# Pega todos os .c de src/ e das subpastas, sem listar um por um
-SRC = $(wildcard src/*.c src/*/*.c)
+# Pega todos os .c da pasta, sem listar um por um
+SRC = $(wildcard *.c)
 TARGET = projetoSO
 
 all: $(TARGET)
