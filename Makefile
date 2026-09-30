@@ -12,6 +12,6 @@ $(TARGET): $(SRC)
 	$(CC) $(CFLAGS) -o $@ $(SRC)
 
 clean:
-	rm -f $(TARGET) $(TARGET).exe
+	rm -rf $(TARGET) $(TARGET).exe $(TARGET).dSYM
 
 .PHONY: all clean

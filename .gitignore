@@ -5,3 +5,4 @@
 *.exe
 .DS_Store
 /projetoSO
+*.dSYM/
