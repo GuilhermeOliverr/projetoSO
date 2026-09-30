@@ -2,8 +2,6 @@
 
 Simulador de escalonamento de processos, desenvolvido em C para a disciplina de Sistemas Operacionais.
 
-Autor: Guilherme Oliver Silva Pereira
-
 ## Requisitos
 
 - `gcc` (compilador C com suporte a C11)
