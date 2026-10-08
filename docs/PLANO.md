@@ -120,21 +120,21 @@ maior prioridade**. Os testes acima são de monoprocessador; vamos mostrar a uti
   de tamanho e abre em qualquer navegador.
 - **Opcional**: também gerar um `.html` com o SVG e controles para navegar pelos ticks.
 
-### 4.2 Módulos (arquivos na raiz, como o Makefile já espera)
+### 4.2 Módulos (código em `src/`, cabeçalhos em `include/`)
 ```
-main.c          # menu principal e argumentos de linha de comando
-config.c/.h     # leitura e validação do arquivo de configuração e valores padrão
-task.h          # TCB e estados da tarefa
-sim.c/.h        # relógio, ativações, execução por tick, detecção de eventos
-sched.h         # interface do escalonador (contrato dos plugins)
-sched_rm.c      # Rate Monotonic
-sched_edf.c     # Earliest Deadline First
-sched_tie.c     # cadeia de desempate comum (critérios 1 a 5)
-history.c/.h    # snapshots para avançar/retroceder
-gantt_tui.c     # desenho do Gantt no terminal
-gantt_svg.c     # exportação SVG
-ui.c/.h         # modo passo a passo: comandos, inspeção e edição
-tests/          # arquivos .txt de configuração (válidos e inválidos) + script de teste
+src/main.c                 # menu principal e argumentos de linha de comando
+src/core/config.c          # leitura e validação do arquivo de configuração e valores padrão
+include/task.h             # TCB e estados da tarefa
+src/core/sim.c             # relógio, ativações, execução por tick, detecção de eventos
+include/sched.h            # interface do escalonador (contrato dos plugins)
+src/sched/sched_rm.c       # Rate Monotonic
+src/sched/sched_edf.c      # Earliest Deadline First
+src/sched/sched_tie.c      # cadeia de desempate comum (critérios 1 a 5)
+src/core/history.c         # snapshots para avançar/retroceder
+src/gantt/gantt_tui.c      # desenho do Gantt no terminal
+src/gantt/gantt_svg.c      # exportação SVG
+src/ui/ui.c                # modo passo a passo: comandos, inspeção e edição
+tests/                     # arquivos .txt de configuração (válidos e inválidos) + script de teste
 ```
 
 ### 4.3 TCB

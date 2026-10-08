@@ -198,8 +198,8 @@ Mais exemplos em `exemplos/` e `tests/validos/`.
 - **Histórico**: um snapshot completo por tick (simples e garantidamente
   correto). O modo completo não guarda snapshots.
 - **Escalonador plugável**: um algoritmo é uma função de comparação de
-  prioridade (`sched.h`). Para incluir um novo, crie `sched_xxx.c` e registre em
-  `sched_registro.c`, ou compile como biblioteca dinâmica (`plugins/exemplo_fifo.c`,
+  prioridade (`include/sched.h`). Para incluir um novo, crie `src/sched/sched_xxx.c` e registre em
+  `src/sched/sched_registro.c`, ou compile como biblioteca dinâmica (`plugins/exemplo_fifo.c`,
   `make plugins`) e carregue com `--plugin`.
 - **Interface**: terminal com cores ANSI 24-bit e imagem final em SVG gerada à
   mão — nenhuma biblioteca gráfica.
@@ -208,25 +208,28 @@ Mais exemplos em `exemplos/` e `tests/validos/`.
 
 ```
 projetoSO/
-├── main.c            # argumentos de linha de comando e fluxo principal
-├── config.c/.h       # leitura e validação do arquivo, valores padrão
-├── task.h            # TCB e estados da tarefa
-├── sim.c/.h          # relógio, ativações, ciclo do tick, eventos
-├── history.c         # snapshots (avançar/retroceder) e rastro do Gantt
-├── sched.h           # contrato dos escalonadores
-├── sched_rm.c        # Rate Monotonic
-├── sched_edf.c       # Earliest Deadline First
-├── sched_tie.c       # cadeia de desempate comum
-├── sched_registro.c  # tabela de escalonadores e carga de plugins
-├── gantt.h           # interface dos desenhos
-├── gantt_tui.c       # Gantt no terminal
-├── gantt_svg.c       # exportação SVG
-├── ui.c/.h           # tela de configuração, modo passo a passo e modo completo
-├── util.c/.h         # strings, números, terminal, gerador aleatório
-├── plugins/          # escalonador de exemplo carregado com dlopen
-├── exemplos/         # figuras 2.5 e 2.6 do capítulo, várias CPUs, quantum
-├── tests/            # arquivos válidos/inválidos e run_tests.sh
-├── PLANO.md          # plano do projeto
+├── src/
+│   ├── main.c              # argumentos de linha de comando e fluxo principal
+│   ├── core/
+│   │   ├── config.c        # leitura e validação do arquivo, valores padrão
+│   │   ├── sim.c           # relógio, ativações, ciclo do tick, eventos
+│   │   ├── history.c       # snapshots (avançar/retroceder) e rastro do Gantt
+│   │   └── util.c          # strings, números, terminal, gerador aleatório
+│   ├── sched/
+│   │   ├── sched_rm.c      # Rate Monotonic
+│   │   ├── sched_edf.c     # Earliest Deadline First
+│   │   ├── sched_tie.c     # cadeia de desempate comum
+│   │   └── sched_registro.c  # tabela de escalonadores e carga de plugins
+│   ├── gantt/
+│   │   ├── gantt_tui.c     # Gantt no terminal
+│   │   └── gantt_svg.c     # exportação SVG
+│   └── ui/
+│       └── ui.c            # tela de configuração, modo passo a passo e modo completo
+├── include/                # cabeçalhos (config.h, task.h, sim.h, sched.h, gantt.h, ui.h, util.h)
+├── plugins/                # escalonador de exemplo carregado com dlopen
+├── exemplos/               # figuras 2.5 e 2.6 do capítulo, várias CPUs, quantum
+├── tests/                  # arquivos válidos/inválidos e run_tests.sh
+├── docs/                   # plano do projeto, enunciado e capítulo de referência
 ├── Makefile
 └── README.md
 ```
