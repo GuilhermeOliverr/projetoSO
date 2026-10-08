@@ -10,7 +10,7 @@
  * Usar:      ./projetoSO arquivo.txt --plugin plugins/exemplo_fifo.so
  *            (e no arquivo: FIFO;quantum;cpus)
  */
-#include "../sched.h"
+#include "sched.h"
 
 static int prioridade_fifo(const TCB *a, const TCB *b, int agora) {
     (void)agora;
