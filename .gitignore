@@ -6,3 +6,6 @@
 .DS_Store
 /projetoSO
 *.dSYM/
+
+# imagens geradas pelo simulador
+*_gantt.svg
