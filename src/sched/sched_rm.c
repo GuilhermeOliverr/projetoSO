@@ -6,10 +6,9 @@
  */
 #include "sched.h"
 
-static int prioridade_rm(const TCB *a, const TCB *b, int agora) {
+static int prioridade_rm(const TCB *k, int agora) {
     (void)agora;
-    if (a->periodo != b->periodo) return a->periodo < b->periodo ? -1 : 1;
-    return 0;
+    return k->periodo;
 }
 
 const Escalonador escalonador_rm = {

@@ -12,10 +12,10 @@
  */
 #include "sched.h"
 
-static int prioridade_fifo(const TCB *a, const TCB *b, int agora) {
+/* Prioridade nominal = instante de chegada da ativação (menor = antes). */
+static int prioridade_fifo(const TCB *k, int agora) {
     (void)agora;
-    if (a->chegada_atual != b->chegada_atual) return a->chegada_atual < b->chegada_atual ? -1 : 1;
-    return 0;
+    return k->chegada_atual;
 }
 
 /* O simulador procura exatamente este símbolo (SCHED_SIMBOLO_PLUGIN). */

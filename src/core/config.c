@@ -83,7 +83,7 @@ void config_padrao(Config *cfg) {
 }
 
 void config_liberar(Config *cfg) {
-    for (int i = 0; i < cfg->n; i++) free(cfg->tarefas[i].eventos);
+    for (int i = 0; i < cfg->n; i++) config_liberar_tarefa(&cfg->tarefas[i]);
     free(cfg->tarefas);
     free(cfg->caminho);
     msg_liberar(&cfg->avisos);
@@ -96,9 +96,47 @@ void config_adicionar(Config *cfg, const TarefaCfg *t) {
         cfg->cap = cfg->cap ? cfg->cap * 2 : 8;
         cfg->tarefas = xrealloc(cfg->tarefas, (size_t)cfg->cap * sizeof *cfg->tarefas);
     }
-    cfg->tarefas[cfg->n] = *t;
-    cfg->tarefas[cfg->n].eventos = xstrdup(t->eventos ? t->eventos : "");
+    TarefaCfg *novo = &cfg->tarefas[cfg->n];
+    *novo = *t;
+    novo->eventos = NULL;
+    novo->lista_ev = NULL;
+    novo->nev = 0;
+    config_definir_eventos(novo, t->eventos ? t->eventos : "");
     cfg->n++;
+}
+
+void config_liberar_tarefa(TarefaCfg *t) {
+    for (int i = 0; i < t->nev; i++) free(t->lista_ev[i]);
+    free(t->lista_ev);
+    free(t->eventos);
+    t->lista_ev = NULL;
+    t->eventos = NULL;
+    t->nev = 0;
+}
+
+void config_definir_eventos(TarefaCfg *t, const char *texto) {
+    /* Copia antes de liberar: `texto` pode ser o próprio t->eventos. */
+    char *raw = xstrdup(texto ? texto : "");
+    config_liberar_tarefa(t);
+    t->eventos = raw;
+    /* Aceitamos ',' e ';' como separadores porque o formato do Projeto B
+     * ainda não foi divulgado; itens vazios (ex.: ";;") são ignorados. */
+    char *copia = xstrdup(raw);
+    int cap = 0;
+    for (char *p = copia; p;) {
+        char *sep = strpbrk(p, ",;");
+        if (sep) *sep = '\0';
+        char *item = str_trim(p);
+        if (*item) {
+            if (t->nev == cap) {
+                cap = cap ? cap * 2 : 4;
+                t->lista_ev = xrealloc(t->lista_ev, (size_t)cap * sizeof *t->lista_ev);
+            }
+            t->lista_ev[t->nev++] = xstrdup(item);
+        }
+        p = sep ? sep + 1 : NULL;
+    }
+    free(copia);
 }
 
 const char *config_validar_quantum(int v) {

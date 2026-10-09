@@ -97,6 +97,11 @@ static const char *val_min(int v, const void *ctx) {
 }
 
 static const char *val_quantum(int v, const void *ctx) { (void)ctx; return config_validar_quantum(v); }
+/* Rótulo do prompt de CPUs com o limite N à vista (steering, ambig. 6). */
+#define STR_(x) #x
+#define STR(x) STR_(x)
+#define ROTULO_CPUS "quantidade de CPUs (1 a " STR(MAX_CPUS) ")"
+
 static const char *val_cpus(int v, const void *ctx) { (void)ctx; return config_validar_cpus(v); }
 
 /* Contexto para validar id único. */
@@ -179,8 +184,8 @@ void ui_imprimir_config(const Config *cfg) {
     term_negrito();
     printf("Sistema: ");
     term_reset();
-    printf("algoritmo %s (%s) | quantum %d | %d CPU(s)\n", e ? e->nome : "?", e ? e->descricao : "",
-           cfg->quantum, cfg->ncpus);
+    printf("algoritmo %s (%s) | quantum %d | %d CPU(s) (máx. %d)\n", e ? e->nome : "?",
+           e ? e->descricao : "", cfg->quantum, cfg->ncpus, MAX_CPUS);
     term_negrito();
     printf("Tarefas (%d periódicas):\n", cfg->n);
     term_reset();
@@ -267,13 +272,13 @@ bool ui_menu_config(Config *cfg) {
             break;
         }
         case 'k': pedir_int("quantum", cfg->quantum, &cfg->quantum, val_quantum, NULL); break;
-        case 'c': pedir_int("quantidade de CPUs", cfg->ncpus, &cfg->ncpus, val_cpus, NULL); break;
+        case 'c': pedir_int(ROTULO_CPUS, cfg->ncpus, &cfg->ncpus, val_cpus, NULL); break;
         case 'e': case 'r': {
             if (!tem_arg) { ui_erro("informe o id da tarefa, ex.: %c 2", cmd); break; }
             int i = indice_cfg(cfg, arg);
             if (i < 0) { ui_erro("não existe tarefa com id %d", arg); break; }
             if (cmd == 'r') {
-                free(cfg->tarefas[i].eventos);
+                config_liberar_tarefa(&cfg->tarefas[i]);
                 memmove(&cfg->tarefas[i], &cfg->tarefas[i + 1], (size_t)(cfg->n - i - 1) * sizeof(TarefaCfg));
                 cfg->n--;
                 printf("Tarefa %d removida.\n", arg);
@@ -285,9 +290,14 @@ bool ui_menu_config(Config *cfg) {
             char ev[512];
             printf("Editando a tarefa %d (Enter mantém o valor):\n", arg);
             if (pedir_tarefa(&t, &c, 0, ev, sizeof ev)) {
-                free(cfg->tarefas[i].eventos);
-                cfg->tarefas[i] = t;
-                cfg->tarefas[i].eventos = xstrdup(ev);
+                /* `t` divide os ponteiros de eventos com a original: copia os
+                 * campos numéricos e troca a lista pelo texto novo. */
+                TarefaCfg *dst = &cfg->tarefas[i];
+                t.eventos = dst->eventos;
+                t.lista_ev = dst->lista_ev;
+                t.nev = dst->nev;
+                *dst = t;
+                config_definir_eventos(dst, ev);
             }
             free(ids);
             break;
@@ -296,7 +306,7 @@ bool ui_menu_config(Config *cfg) {
             int *ids = ids_cfg(cfg);
             CtxIds c = {ids, cfg->n, -1};
             TarefaCfg t = {proximo_id(ids, cfg->n), config_cor_padrao(cfg->n), PADRAO_INGRESSO,
-                           PADRAO_DURACAO, PADRAO_PERIODO, PADRAO_PERIODO, NULL, 0};
+                           PADRAO_DURACAO, PADRAO_PERIODO, PADRAO_PERIODO, NULL, 0, NULL, 0};
             char ev[512];
             printf("Nova tarefa (Enter aceita o valor sugerido):\n");
             if (pedir_tarefa(&t, &c, 0, ev, sizeof ev)) config_adicionar(cfg, &t);
@@ -436,8 +446,12 @@ static void detalhes_tarefa(const Simulador *s, int i) {
     term_reset();
     printf("  parâmetros: cor %06X | ingresso %d | duração %d | período %d | prazo %d\n",
            k->cor, k->ingresso, k->duracao, k->periodo, k->prazo);
-    printf("  eventos (Projeto B): %s\n", k->eventos_raw && *k->eventos_raw ? k->eventos_raw : "-");
+    printf("  eventos (Projeto B): %d", k->neventos);
+    for (int j = 0; j < k->neventos; j++) printf("%s%s", j ? " | " : ": ", k->eventos[j]);
+    putchar('\n');
     printf("  estado: %s\n", estado_nome(k->estado));
+    if (k->restante > 0)
+        printf("  prioridade (menor = mais prioritária): nominal %d, ativa %d\n", k->prio_nominal, k->prio_ativa);
     printf("  ativações: %d chegaram, %d concluídas (de %d)\n", k->liberadas, k->concluidas, MAX_ATIVACOES);
     if (k->restante > 0) {
         printf("  ativação atual: nº %d, chegou em %d, deadline em %d, faltam %d tick(s)%s\n",
@@ -633,13 +647,13 @@ static void editar_tarefa(Simulador *s, int i, char *msg, size_t tam) {
     sim_concluir_edicao(s);
 }
 
-static void adicionar_tarefa(Simulador *s, ListaMsg *textos, char *msg, size_t tam) {
+static void adicionar_tarefa(Simulador *s, Config *extras, char *msg, size_t tam) {
     Estado *e = &s->atual;
     int *ids = xmalloc((size_t)(e->n + 1) * sizeof(int));
     for (int i = 0; i < e->n; i++) ids[i] = e->tarefas[i].id;
     CtxIds c = {ids, e->n, -1};
     TarefaCfg t = {proximo_id(ids, e->n), config_cor_padrao(e->n), e->t, PADRAO_DURACAO,
-                   PADRAO_PERIODO, PADRAO_PERIODO, NULL, 0};
+                   PADRAO_PERIODO, PADRAO_PERIODO, NULL, 0, NULL, 0};
     char ev[512];
     int min = e->t;
     printf("Nova tarefa (Enter aceita o valor sugerido; ingresso >= %d):\n", min);
@@ -648,12 +662,11 @@ static void adicionar_tarefa(Simulador *s, ListaMsg *textos, char *msg, size_t t
         return;
     }
     free(ids);
-    /* O TCB aponta para o texto dos eventos; guardamos uma cópia que vive
-     * até o fim da simulação. */
-    msg_add(textos, "%s", ev);
-    t.eventos = textos->itens[textos->n - 1];
+    /* O TCB aponta para os eventos da configuração; guardamos a tarefa em
+     * `extras`, que vive até o fim da simulação. */
+    config_adicionar(extras, &t);
     sim_preparar_edicao(s);
-    sim_adicionar_tarefa(s, &t);
+    sim_adicionar_tarefa(s, &extras->tarefas[extras->n - 1]);
     sim_concluir_edicao(s);
     fmsg(msg, tam, "Tarefa %d adicionada; chega no instante %d.", t.id, t.ingresso);
 }
@@ -661,7 +674,8 @@ static void adicionar_tarefa(Simulador *s, ListaMsg *textos, char *msg, size_t t
 void ui_passo_a_passo(const Config *cfg, const OpcoesUI *op) {
     Simulador s;
     sim_iniciar(&s, cfg, true, op->semente);
-    ListaMsg textos = {0};
+    Config extras;              /* tarefas criadas durante a simulação */
+    config_padrao(&extras);
     char msg[1600] = "";
     char caminho_svg[1024];
     caminho_svg_padrao(cfg, op, caminho_svg, sizeof caminho_svg);
@@ -778,7 +792,7 @@ void ui_passo_a_passo(const Config *cfg, const OpcoesUI *op) {
             }
             break;
         }
-        case '+': adicionar_tarefa(&s, &textos, msg, sizeof msg); exportado = false; break;
+        case '+': adicionar_tarefa(&s, &extras, msg, sizeof msg); exportado = false; break;
         case 'a': {
             int a = pedir_algoritmo(s.atual.alg);
             if (a >= 0 && a != s.atual.alg) {
@@ -794,7 +808,7 @@ void ui_passo_a_passo(const Config *cfg, const OpcoesUI *op) {
         case 'k': case 'c': {
             int v;
             bool ok = cmd == 'k' ? pedir_int("quantum", s.atual.quantum, &v, val_quantum, NULL)
-                                 : pedir_int("quantidade de CPUs", s.atual.ncpus, &v, val_cpus, NULL);
+                                 : pedir_int(ROTULO_CPUS, s.atual.ncpus, &v, val_cpus, NULL);
             if (!ok) break;
             sim_preparar_edicao(&s);
             if (cmd == 'k') s.atual.quantum = v;
@@ -833,5 +847,5 @@ void ui_passo_a_passo(const Config *cfg, const OpcoesUI *op) {
 sair:
     estatisticas(&s);
     sim_liberar(&s);
-    msg_liberar(&textos);
+    config_liberar(&extras);
 }

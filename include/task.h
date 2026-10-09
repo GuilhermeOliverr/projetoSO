@@ -2,8 +2,8 @@
  * task.h - TCB (Task Control Block): tudo o que o simulador sabe sobre uma
  * tarefa fica numa única estrutura (requisito 1.3).
  *
- * Decisão: o TCB não tem ponteiros para memória própria (só `eventos_raw`,
- * que aponta para texto imutável da configuração). Assim um snapshot do
+ * Decisão: o TCB não tem ponteiros para memória própria (só `eventos_raw` e
+ * `eventos`, que apontam para dados imutáveis da configuração). Assim um snapshot do
  * sistema é só uma cópia de um vetor de TCBs com memcpy, o que deixa o
  * avançar/retroceder simples e barato.
  */
@@ -32,7 +32,11 @@ typedef struct {
     int duracao;               /* C: ticks de CPU por ativação                   */
     int periodo;               /* P: intervalo entre ativações                   */
     int prazo;                 /* D: prazo relativo à chegada de cada ativação    */
-    const char *eventos_raw;   /* lista de eventos, guardada crua p/ o Projeto B */
+    const char *eventos_raw;   /* lista de eventos como veio do arquivo          */
+    const char *const *eventos;/* a mesma lista já separada, um item por evento.
+                                  Vetor dinâmico (sem limite de eventos por
+                                  tarefa) que o Projeto B vai interpretar.      */
+    int neventos;
 
     /* ---- estado dinâmico ---- */
     EstadoTarefa estado;
@@ -51,6 +55,15 @@ typedef struct {
                                   Serve para o critério 1 de desempate e para
                                   manter a tarefa na mesma CPU (afinidade).     */
     int quantum_usado;         /* ticks seguidos desde que ganhou a CPU          */
+
+    /* ---- prioridade (menor valor = mais prioritária) ----
+     * nominal: a que o algoritmo dá à tarefa (RM: período; EDF: deadline
+     *          absoluto), recalculada a cada tick por sched_atualizar;
+     * ativa:   a que o escalonador realmente compara. No Projeto A é igual
+     *          à nominal; no Projeto B a herança de prioridade (PIP/PCP)
+     *          vai elevá-la temporariamente sem tocar na nominal. */
+    int prio_nominal;
+    int prio_ativa;
 
     /* ---- estatísticas ---- */
     int ticks_exec, ticks_espera, ticks_suspensa;
