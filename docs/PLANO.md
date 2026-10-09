@@ -39,7 +39,7 @@ deixa ganchos para ele (eventos, mutex, aperiódicas).
   sugeridos e editáveis antes/durante a simulação.
 - **Algoritmos**: `RM` e `EDF`, ambos preemptivos, plugáveis sem mexer na simulação.
 - **Desempate**, nesta ordem: (1) tarefa que já estava executando; (2) prazo;
-  (3) ingresso mais antigo; (4) menor duração; (5) **sorteio**, com marcador no Gantt.
+  (3) ingresso mais antigo (instante de criação da tarefa); (4) menor duração; (5) **sorteio**, com marcador no Gantt.
 - Somente **tarefas periódicas**: `periodo == 0` (aperiódica) é ignorada **com aviso**.
   Cada tarefa periódica termina após **10 ativações**.
 - Perda de prazo: a tarefa **continua executando** até completar a duração; o erro aparece no Gantt.
@@ -66,7 +66,7 @@ id;cor;ingresso;duracao;periodo;prazo;lista_eventos
 | `duracao` | int | > 0 |
 | `periodo` | int | > 0 periódica; = 0 aperiódica (ignorada com aviso); < 0 **erro** |
 | `prazo` | int | > 0, relativo à ativação |
-| `lista_eventos` | texto | guardado cru para o Projeto B (pode ter vários eventos) |
+| `lista_eventos` | texto | guardado sem interpretação para o Projeto B: texto cru + lista separada por `,`/`;` |
 
 Regras do parser:
 - linha pode terminar com `;` ou não;
@@ -144,7 +144,8 @@ typedef enum { T_NOVA, T_PRONTA, T_EXECUTANDO, T_SUSPENSA, T_TERMINADA } EstadoT
 typedef struct {
     /* definidos no arquivo */
     int id; unsigned cor; int ingresso, duracao, periodo, prazo;
-    char *eventos_raw;          /* Projeto B */
+    const char *eventos_raw;    /* Projeto B: texto cru */
+    const char *const *eventos; int neventos;   /* mesma lista, separada */
     /* estado dinâmico */
     EstadoTarefa estado;
     int ativacao;               /* 0..9 */
@@ -153,6 +154,7 @@ typedef struct {
     int deadline_abs;           /* chegada_atual + prazo */
     int cpu;                    /* -1 se não está executando */
     int quantum_usado;
+    int prio_nominal, prio_ativa;   /* ativa = nominal no A; herança no B */
     bool prazo_perdido;
     /* estatísticas */
     int ticks_exec, ticks_espera, deadlines_perdidos;
@@ -161,15 +163,16 @@ typedef struct {
 
 ### 4.4 Escalonador plugável
 ```c
-/* Compara duas tarefas prontas: <0 se a tem prioridade maior que b, 0 se empata. */
-typedef int (*prioridade_fn)(const TCB *a, const TCB *b, int agora);
+/* Prioridade nominal da tarefa: menor valor = mais prioritária. */
+typedef int (*prioridade_fn)(const TCB *k, int agora);
 
 typedef struct {
     const char *nome;           /* "RM", "EDF" (comparação case-insensitive) */
     prioridade_fn prioridade;
 } Escalonador;
 ```
-- A simulação ordena a fila de prontos com `prioridade` e, quando dá empate, aplica a
+- A simulação calcula a prioridade nominal, copia para a ativa (herança no Projeto B),
+  ordena a fila de prontos pela ativa e, quando dá empate, aplica a
   **cadeia de desempate** (`sched_tie.c`). Depois atribui as M primeiras às CPUs.
 - Um novo algoritmo é só uma struct a mais numa tabela de registro.
 - **Extra** (sugerido no item 4.2 do enunciado): carregar um `.so` com `dlopen`, que faz
@@ -219,8 +222,9 @@ Na inicialização: carregar arquivo (caminho digitado ou passado como argumento
 ---
 
 ## 5. Questões em aberto (confirmar com o professor)
-1. **Quantum em RM/EDF**: proposta: usar o quantum só para revezar tarefas de **mesma
-   prioridade** (quando o desempate cai no critério 1, rodízio ao estourar o quantum).
+1. **Quantum em RM/EDF**: ao fim do quantum o escalonador é chamado de novo (evento
+   "fim de quantum"); pelo desempate (1) a mesma tarefa continua se ainda for a de maior
+   prioridade (padrão do `docs/steering.md`, ambiguidade 1).
 2. **Nova ativação chegando enquanto a anterior ainda não terminou** (prazo > período ou
    atraso): proposta: acumular (a próxima ativação começa logo que a anterior termina)
    e contar como ativação.

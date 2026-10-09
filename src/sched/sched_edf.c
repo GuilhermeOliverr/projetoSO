@@ -7,10 +7,9 @@
  */
 #include "sched.h"
 
-static int prioridade_edf(const TCB *a, const TCB *b, int agora) {
+static int prioridade_edf(const TCB *k, int agora) {
     (void)agora;
-    if (a->deadline_abs != b->deadline_abs) return a->deadline_abs < b->deadline_abs ? -1 : 1;
-    return 0;
+    return k->deadline_abs;
 }
 
 const Escalonador escalonador_edf = {

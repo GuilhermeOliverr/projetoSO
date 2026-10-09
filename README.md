@@ -167,7 +167,8 @@ RM;2;1
   linhas em branco, `\r\n` do Windows e BOM UTF-8 são aceitos; cor com ou sem `#`.
 - Campo vazio usa o valor padrão (com aviso). `prazo` vazio ou ausente = período.
 - `periodo = 0` (aperiódica) é ignorada com aviso; `periodo < 0` é erro.
-- `lista_eventos` é guardada crua para o Projeto B.
+- `lista_eventos` é guardada sem interpretação para o Projeto B: o texto cru e a
+  lista separada por `,` ou `;` (sem limite de eventos por tarefa; nunca gera erro).
 - Erros dizem arquivo, linha, campo e motivo, por exemplo:
   `config.txt:2: campo 'periodo' = -3: valor negativo não é permitido (...)`.
 
@@ -183,12 +184,14 @@ Mais exemplos em `exemplos/` e `tests/validos/`.
   (M = CPUs) executam; quem já estava numa CPU continua nela (evita migração).
   CPU sem tarefa fica desligada.
 - **Desempate** (todos os algoritmos): (1) quem estava executando; (2) deadline
-  absoluto mais próximo; (3) ingresso mais antigo; (4) menor duração;
+  absoluto mais próximo; (3) ingresso da tarefa mais antigo (instante de
+  criação, como define o enunciado); (4) menor duração;
   (5) sorteio. O sorteio só acontece quando decide quem executa, usa um gerador
   com estado guardado no snapshot (voltar/avançar é determinístico) e aparece no Gantt.
-- **Quantum**: RM e EDF não usam fatia de tempo para prioridade, então o quantum
-  reveza tarefas **empatadas**: ao esgotá-lo a tarefa cede a vez às empatadas
-  (round-robin dentro do mesmo nível de prioridade).
+- **Quantum**: ao fim do quantum o escalonador é chamado de novo (evento
+  "fim de quantum", visível no passo a passo); pelo desempate (1) a mesma
+  tarefa continua se ainda for a de maior prioridade. Assim o quantum existe
+  sem distorcer RM/EDF nem a ordem 1→5 do desempate.
 - **Ativação nova antes da anterior terminar** (atraso ou prazo > período): a
   nova fica acumulada e começa assim que a anterior termina.
 - **Perda de prazo**: marcada uma vez por ativação; a tarefa continua até
@@ -197,8 +200,14 @@ Mais exemplos em `exemplos/` e `tests/validos/`.
   quando o usuário suspende uma tarefa no modo passo a passo.
 - **Histórico**: um snapshot completo por tick (simples e garantidamente
   correto). O modo completo não guarda snapshots.
-- **Escalonador plugável**: um algoritmo é uma função de comparação de
-  prioridade (`include/sched.h`). Para incluir um novo, crie `src/sched/sched_xxx.c` e registre em
+- **Prioridade nominal × ativa**: o algoritmo só informa a prioridade nominal
+  (um número, menor = mais prioritária: período no RM, deadline absoluto no
+  EDF); o escalonador compara a prioridade ativa, que no Projeto A é igual à
+  nominal e no Projeto B receberá a herança de prioridade.
+- **Marcadores no Gantt**: cada evento fica na coluna do seu instante exato (a
+  coluna t começa no instante t), no terminal e no SVG.
+- **Escalonador plugável**: um algoritmo é uma função que devolve a prioridade
+  nominal de uma tarefa (`include/sched.h`). Para incluir um novo, crie `src/sched/sched_xxx.c` e registre em
   `src/sched/sched_registro.c`, ou compile como biblioteca dinâmica (`plugins/exemplo_fifo.c`,
   `make plugins`) e carregue com `--plugin`.
 - **Interface**: terminal com cores ANSI 24-bit e imagem final em SVG gerada à

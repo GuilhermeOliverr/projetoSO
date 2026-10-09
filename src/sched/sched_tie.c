@@ -8,31 +8,26 @@
  *      prazo relativo do arquivo) porque é ele que diz quem está mais
  *      "apertado" agora; na 1ª ativação de tarefas com o mesmo ingresso os
  *      dois dão o mesmo resultado;
- *   3. o instante de ingresso: quem chegou antes;
+ *   3. o instante de ingresso da tarefa: quem chegou antes. É o campo
+ *      `ingresso` do arquivo, que o enunciado define como o instante em que
+ *      a tarefa foi criada (e não a chegada da ativação atual);
  *   4. a duração: menor primeiro;
  *   5. sorteio: feito em sim.c, que guarda o estado do gerador aleatório
  *      (precisa ser reproduzível ao retroceder/avançar).
  *
- * Quantum: RM e EDF não usam fatia de tempo para decidir prioridade, então
- * o quantum só serve para revezar tarefas EMPATADAS (como um round-robin
- * dentro do mesmo nível de prioridade). O critério 1 vale enquanto a tarefa
- * não esgotou o quantum; esgotado, ela vai para TRÁS das empatadas, que
- * assim ganham a vez. Se ninguém empata com ela, continua executando.
+ * Quantum (steering, ambiguidade 1): o quantum NÃO entra na comparação. Ao
+ * fim do quantum o escalonador é chamado de novo (sim.c registra o evento
+ * "fim de quantum") e, pelo critério 1, a mesma tarefa continua se ainda for
+ * a de maior prioridade. Assim a ordem 1 -> 5 do enunciado vale sempre e o
+ * quantum não distorce RM/EDF (uma tarefa com deadline mais próximo nunca
+ * perde a CPU para uma empatada só porque esgotou a fatia de tempo).
  */
 #include "sched.h"
 
-/* 0 = estava executando com quantum sobrando (melhor), 1 = não estava
- * executando, 2 = estava executando mas esgotou o quantum (cede a vez). */
-static int posicao_criterio1(const TCB *k, int quantum) {
-    if (k->cpu < 0) return 1;
-    return k->quantum_usado < quantum ? 0 : 2;
-}
-
-int sched_desempate(const TCB *a, const TCB *b, int quantum) {
-    /* Critério 1 */
-    int ea = posicao_criterio1(a, quantum);
-    int eb = posicao_criterio1(b, quantum);
-    if (ea != eb) return ea < eb ? -1 : 1;
+int sched_desempate(const TCB *a, const TCB *b) {
+    /* Critério 1: `cpu` >= 0 significa que executou no tick anterior. */
+    bool ea = a->cpu >= 0, eb = b->cpu >= 0;
+    if (ea != eb) return ea ? -1 : 1;
     /* Critério 2 */
     if (a->deadline_abs != b->deadline_abs) return a->deadline_abs < b->deadline_abs ? -1 : 1;
     /* Critério 3 */
@@ -43,8 +38,13 @@ int sched_desempate(const TCB *a, const TCB *b, int quantum) {
     return 0;
 }
 
-int sched_comparar(const Escalonador *e, const TCB *a, const TCB *b, int agora, int quantum) {
-    int c = e->prioridade(a, b, agora);
-    if (c != 0) return c;
-    return sched_desempate(a, b, quantum);
+void sched_atualizar(const Escalonador *e, TCB *k, int agora) {
+    k->prio_nominal = e->prioridade(k, agora);
+    /* Projeto B: aqui entra a herança (prio_ativa = min(nominal, herdada)). */
+    k->prio_ativa = k->prio_nominal;
+}
+
+int sched_comparar(const TCB *a, const TCB *b) {
+    if (a->prio_ativa != b->prio_ativa) return a->prio_ativa < b->prio_ativa ? -1 : 1;
+    return sched_desempate(a, b);
 }

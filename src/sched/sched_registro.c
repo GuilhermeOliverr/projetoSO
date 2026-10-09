@@ -13,6 +13,7 @@
 #include "util.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #ifndef _WIN32
@@ -29,6 +30,17 @@ static const Escalonador *tabela[MAX_ESCALONADORES] = {
     &escalonador_edf,
 };
 static int quantidade = 2;
+
+#ifndef _WIN32
+/* Handles dos plugins abertos, fechados na saída do programa (atexit) para
+ * não deixar memória do carregador dinâmico pendurada (valgrind limpo). */
+static void *handles[MAX_ESCALONADORES];
+static int nhandles;
+
+static void fechar_plugins(void) {
+    while (nhandles > 0) dlclose(handles[--nhandles]);
+}
+#endif
 
 int sched_quantidade(void) { return quantidade; }
 
@@ -84,7 +96,10 @@ int sched_carregar_plugin(const char *caminho, char *erro, int tam_erro) {
         dlclose(h);
         return -1;
     }
-    /* O handle fica aberto até o fim do programa: a tabela aponta para ele. */
+    /* O handle fica aberto até o fim do programa (a tabela aponta para
+     * dentro dele) e é fechado por fechar_plugins, registrada com atexit. */
+    if (nhandles == 0) atexit(fechar_plugins);
+    handles[nhandles++] = h;
     tabela[quantidade] = e;
     return quantidade++;
 #endif
