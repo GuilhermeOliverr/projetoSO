@@ -9,3 +9,7 @@
 
 # imagens geradas pelo simulador
 *_gantt.svg
+
+# docs só locais: apenas o enunciado em PDF vai para o GitHub
+docs/*
+!docs/simulador-escalonamento-v20260830-enunciado.pdf
