@@ -10,7 +10,8 @@
  *              ?        (re)começou a executar por sorteio (critério 5)
  *              ─        pronta, esperando CPU (sem cor)
  *              ░        suspensa (preto pontilhado)
- *   marcador:  ↓ chegada  ↑ fim de ativação  ↕ os dois no mesmo tick
+ *   marcador:  ↓ chegada  ↑ fim de ativação  ↕ os dois no mesmo instante
+ *              (todos na coluna do instante exato: a coluna t começa em t)
  *              ■ término (10ª ativação)  ✗ perda de prazo
  *   CPUs:      cor e id da tarefa que ocupou a CPU; · CPU desligada
  */
@@ -33,9 +34,11 @@ void gantt_mascaras(const Simulador *s, int ini, int fim, unsigned char *mask) {
     memset(mask, 0, (size_t)(fim - ini) * (size_t)(n ? n : 1));
     for (int i = 0; i < s->nev; i++) {
         const Evento *v = &s->ev[i];
-        /* Eventos de fim de tick (instante t+1) ficam na coluna do tick em
-         * que a tarefa executou pela última vez: é ali que o olho procura. */
-        int col = v->tick;
+        /* Cada evento vai para a coluna do seu instante exato (req. 2.2):
+         * a coluna t começa no instante t, então uma chegada em t fica no
+         * início do tick t e um fim de ativação no instante t+1 fica logo
+         * depois do último tick executado. */
+        int col = v->instante;
         if (col < ini || col >= fim || v->tarefa >= n) continue;
         unsigned char *m = &mask[(size_t)(col - ini) * n + v->tarefa];
         switch (v->tipo) {
@@ -134,9 +137,13 @@ void gantt_tui(const Simulador *s, int ini, int fim) {
         printf("%*s(nenhum tick simulado ainda)\n", lbl, "");
         return;
     }
-    int w = fim - ini;
-    unsigned char *mask = xmalloc((size_t)w * (size_t)(n ? n : 1));
-    gantt_mascaras(s, ini, fim, mask);
+    /* A linha de marcadores tem uma coluna a mais quando a janela chega ao
+     * último tick: é onde aparecem os eventos do instante final (ex.: o
+     * término da última ativação). Nas outras janelas esse instante é a
+     * primeira coluna da janela seguinte, e não o repetimos. */
+    int fim_m = fim == s->ncols ? fim + 1 : fim;
+    unsigned char *mask = xmalloc((size_t)(fim_m - ini) * (size_t)(n ? n : 1));
+    gantt_mascaras(s, ini, fim_m, mask);
     int *ordem = gantt_ordem(e);
 
     for (int r = 0; r < n; r++) {
@@ -145,7 +152,7 @@ void gantt_tui(const Simulador *s, int ini, int fim) {
 
         /* linha de marcadores */
         printf("%*s ", lbl, "");
-        for (int t = ini; t < fim; t++) {
+        for (int t = ini; t < fim_m; t++) {
             unsigned m = mask[(size_t)(t - ini) * n + i];
             if (m & M_PRAZO) {
                 term_fg(COR_PRAZO);
@@ -306,7 +313,7 @@ void gantt_texto(const Simulador *s) {
     printf("Eventos:\n");
     for (int i = 0; i < s->nev; i++) {
         const Evento *v = &s->ev[i];
-        if (v->tipo == EV_PREEMPCAO || v->tipo == EV_CHEGADA || v->tipo == EV_FIM_ATIVACAO) continue;
+        if (v->tipo == EV_PREEMPCAO || v->tipo == EV_FIM_QUANTUM || v->tipo == EV_CHEGADA || v->tipo == EV_FIM_ATIVACAO) continue;
         printf("  t=%d T%d %s (ativação %d)", v->instante, e->tarefas[v->tarefa].id,
                evento_nome(v->tipo), v->ativacao + 1);
         if (v->cpu >= 0) printf(" CPU%d", v->cpu);

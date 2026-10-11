@@ -1,6 +1,8 @@
-# -Wall -Wextra pegam erros cedo; -std=c11 garante portabilidade
+# -Wall -Wextra -pedantic pegam erros cedo; -std=c11 garante portabilidade;
+# -O2 é a otimização pedida no steering e -g mantém os símbolos de depuração
+# (valgrind/gdb mostram linha e função)
 CC = gcc
-CFLAGS = -Wall -Wextra -std=c11 -g -Iinclude
+CFLAGS = -Wall -Wextra -pedantic -std=c11 -O2 -g -Iinclude
 
 # Pega todos os .c de src/ (e subpastas), sem listar um por um
 SRC = $(wildcard src/*.c src/*/*.c)

@@ -35,6 +35,11 @@ typedef struct {
     int ingresso, duracao, periodo, prazo;
     char *eventos;   /* texto cru de lista_eventos ("" se não houver) */
     int linha;       /* linha do arquivo (0 = criada pelo usuário)     */
+    /* lista_eventos separada em itens (vetor dinâmico, sem limite). O
+     * formato de cada evento só será definido no Projeto B, então aqui os
+     * itens são guardados sem interpretação e nunca causam erro. */
+    char **lista_ev;
+    int nev;
 } TarefaCfg;
 
 typedef struct {
@@ -67,8 +72,16 @@ void config_imprimir_mensagens(const Config *cfg);
 /* Cor padrão para a tarefa de índice i (paleta com cores bem distintas). */
 unsigned config_cor_padrao(int i);
 
-/* Acrescenta uma tarefa (cópia de `t`, eventos duplicado). */
+/* Acrescenta uma tarefa (cópia de `t`; os eventos são duplicados a partir
+ * de t->eventos, a lista_ev de `t` é ignorada). */
 void config_adicionar(Config *cfg, const TarefaCfg *t);
+
+/* Troca a lista de eventos da tarefa pelo texto `texto` (copiado), já
+ * separando os itens por ',' ou ';'. Libera a lista anterior. */
+void config_definir_eventos(TarefaCfg *t, const char *texto);
+
+/* Libera a memória própria de uma tarefa (texto e lista de eventos). */
+void config_liberar_tarefa(TarefaCfg *t);
 
 /* Validação comum ao arquivo e às telas de edição. Devolve NULL se ok, ou
  * o motivo do erro. */

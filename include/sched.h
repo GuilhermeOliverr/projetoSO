@@ -2,15 +2,17 @@
  * sched.h - contrato dos escalonadores ("plugins").
  *
  * Requisito 4.2: deve ser fácil incluir algoritmos novos sem mexer na
- * simulação. Por isso um escalonador aqui é só uma função de COMPARAÇÃO de
- * prioridade entre duas tarefas prontas. A simulação (sim.c) é quem monta a
- * fila global, aplica a cadeia de desempate comum (sched_tie.c) e entrega as
- * M tarefas de maior prioridade para as M CPUs.
+ * simulação. Por isso um escalonador aqui é só uma função que diz a
+ * PRIORIDADE NOMINAL de uma tarefa (um número; menor = mais prioritária).
+ * A simulação (sim.c) é quem monta a fila global, aplica a cadeia de
+ * desempate comum (sched_tie.c) e entrega as M tarefas de maior prioridade
+ * para as M CPUs.
  *
- * Por que comparação e não "devolva a próxima tarefa"? Com várias CPUs
+ * Por que um número e não "devolva a próxima tarefa"? Com várias CPUs
  * precisamos das M melhores, não só da melhor, e o desempate (critérios 1 a
- * 5 do enunciado) é igual para todos os algoritmos. Com a comparação, cada
- * algoritmo novo tem poucas linhas e não pode errar o desempate.
+ * 5 do enunciado) é igual para todos os algoritmos. E, sendo um número, a
+ * simulação consegue separar a prioridade nominal (do algoritmo) da ativa
+ * (a comparada de fato), o que a herança de prioridade do Projeto B exige.
  *
  * Para adicionar um algoritmo:
  *   1. crie sched_xxx.c com uma função prioridade_fn e um `const Escalonador`;
@@ -23,10 +25,10 @@
 
 #include "task.h"
 
-/* Devolve < 0 se `a` tem prioridade MAIOR que `b`, > 0 se menor, 0 se
- * empatam (aí entra a cadeia de desempate). `agora` é o tick atual, útil
- * para algoritmos dinâmicos. */
-typedef int (*prioridade_fn)(const TCB *a, const TCB *b, int agora);
+/* Prioridade nominal da tarefa `k` no tick `agora` (útil para algoritmos
+ * dinâmicos). MENOR valor = MAIOR prioridade; valores iguais empatam e aí
+ * entra a cadeia de desempate. */
+typedef int (*prioridade_fn)(const TCB *k, int agora);
 
 typedef struct {
     const char *nome;          /* string usada no arquivo (sem diferenciar caixa) */
@@ -47,12 +49,16 @@ void sched_listar_nomes(char *buf, int tam);  /* "RM, EDF" para mensagens */
  * com o motivo em `erro`. */
 int sched_carregar_plugin(const char *caminho, char *erro, int tam_erro);
 
-/* ---- desempate comum (sched_tie.c) ---- */
-/* Critérios 1 a 4 do enunciado (o 5, sorteio, é feito pela simulação, que
- * tem o gerador aleatório). Mesmo sinal de prioridade_fn. */
-int sched_desempate(const TCB *a, const TCB *b, int quantum);
+/* ---- prioridade e desempate comum (sched_tie.c) ---- */
+/* Recalcula prio_nominal com o algoritmo `e` e copia para prio_ativa (no
+ * Projeto A não há herança de prioridade). */
+void sched_atualizar(const Escalonador *e, TCB *k, int agora);
 
-/* Prioridade + desempate: ordem total usada para escolher as tarefas. */
-int sched_comparar(const Escalonador *e, const TCB *a, const TCB *b, int agora, int quantum);
+/* Critérios 1 a 4 do enunciado (o 5, sorteio, é feito pela simulação, que
+ * tem o gerador aleatório). < 0 se `a` vem antes de `b`, > 0 se depois. */
+int sched_desempate(const TCB *a, const TCB *b);
+
+/* Prioridade ativa + desempate: ordem usada para escolher as tarefas. */
+int sched_comparar(const TCB *a, const TCB *b);
 
 #endif

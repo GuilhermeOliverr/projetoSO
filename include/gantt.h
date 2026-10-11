@@ -22,7 +22,8 @@ enum {
     M_CHEGADA = 1, M_FIM = 2, M_TERMINO = 4, M_PRAZO = 8, M_SORTEIO = 16,
 };
 
-/* Preenche mask[(tick - ini) * n + tarefa] para ticks em [ini, fim). */
+/* Preenche mask[(instante - ini) * n + tarefa] para instantes em
+ * [ini, fim): cada evento cai na coluna do seu instante exato. */
 void gantt_mascaras(const Simulador *s, int ini, int fim, unsigned char *mask);
 
 /* Índices das tarefas ordenados por id DECRESCENTE (ordem de cima para

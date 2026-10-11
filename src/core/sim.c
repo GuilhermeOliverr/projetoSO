@@ -38,6 +38,7 @@ const char *evento_nome(TipoEvento t) {
     case EV_PRAZO_PERDIDO: return "perda de prazo";
     case EV_SORTEIO: return "sorteio";
     case EV_PREEMPCAO: return "preempção";
+    case EV_FIM_QUANTUM: return "fim de quantum";
     default: return "?";
     }
 }
@@ -51,6 +52,8 @@ void tcb_iniciar(TCB *k, const TarefaCfg *t) {
     k->periodo = t->periodo;
     k->prazo = t->prazo;
     k->eventos_raw = t->eventos;
+    k->eventos = (const char *const *)t->lista_ev;
+    k->neventos = t->nev;
     k->estado = T_NOVA;
     k->proxima_chegada = t->ingresso;
     k->cpu = -1;
@@ -119,7 +122,10 @@ static void escalonar(Simulador *s) {
     int nc = 0;
     for (int i = 0; i < n; i++) {
         TCB *k = &e->tarefas[i];
-        if ((k->estado == T_PRONTA || k->estado == T_EXECUTANDO) && k->restante > 0) cand[nc++] = i;
+        if ((k->estado == T_PRONTA || k->estado == T_EXECUTANDO) && k->restante > 0) {
+            sched_atualizar(esc, k, t);
+            cand[nc++] = i;
+        }
     }
 
     int livres = e->ncpus;
@@ -129,13 +135,13 @@ static void escalonar(Simulador *s) {
         int melhor = -1;
         for (int j = 0; j < nc; j++) {
             if (escolhido[cand[j]]) continue;
-            if (melhor < 0 || sched_comparar(esc, &e->tarefas[cand[j]], &e->tarefas[melhor], t, e->quantum) < 0)
+            if (melhor < 0 || sched_comparar(&e->tarefas[cand[j]], &e->tarefas[melhor]) < 0)
                 melhor = cand[j];
         }
         int ng = 0;
         for (int j = 0; j < nc; j++) {
             int i = cand[j];
-            if (!escolhido[i] && sched_comparar(esc, &e->tarefas[i], &e->tarefas[melhor], t, e->quantum) == 0)
+            if (!escolhido[i] && sched_comparar(&e->tarefas[i], &e->tarefas[melhor]) == 0)
                 grupo[ng++] = i;
         }
         if (ng <= livres) {
@@ -185,8 +191,12 @@ static void escalonar(Simulador *s) {
         int i = cand[j];
         TCB *k = &e->tarefas[i];
         if (escolhido[i]) {
-            /* Quantum novo se acabou de ganhar a CPU ou se esgotou o
-             * anterior e mesmo assim foi escolhida pelos outros critérios. */
+            /* Quantum novo se acabou de ganhar a CPU, ou se esgotou o
+             * anterior e o escalonador, reavaliando, manteve a tarefa (ela
+             * ainda é a de maior prioridade). O evento deixa o fim do
+             * quantum visível sem alterar a escolha (steering, ambig. 1). */
+            if (k->cpu >= 0 && k->quantum_usado >= e->quantum)
+                evento_add(s, t, t, EV_FIM_QUANTUM, i, k->concluidas, k->cpu);
             if (k->cpu < 0 || k->quantum_usado >= e->quantum) k->quantum_usado = 0;
             k->cpu = nova_cpu[i];
             k->estado = T_EXECUTANDO;
@@ -196,6 +206,8 @@ static void escalonar(Simulador *s) {
             }
         } else {
             if (k->cpu >= 0) {
+                if (k->quantum_usado >= e->quantum)
+                    evento_add(s, t, t, EV_FIM_QUANTUM, i, k->concluidas, k->cpu);
                 k->preempcoes++;
                 evento_add(s, t, t, EV_PREEMPCAO, i, k->concluidas, k->cpu);
             }

@@ -87,9 +87,12 @@ roda tests/validos/11_tres_cpus_com_sorteio.txt > "$TMP/out"
 grep -q 'CPU2:' "$TMP/out" && ok "3 CPUs na linha do tempo" || falha "3 CPUs"
 grep -q 'desligada' "$TMP/out" && ok "CPU desligada aparece" || falha "CPU desligada"
 grep -q 'sorteio' "$TMP/out" && ok "sorteio registrado (critério 5)" || falha "sorteio"
-roda exemplos/quantum_rodizio.txt > "$TMP/out"
-grep -q 'CPU0: \[0,2)T. \[2,4)T. \[4,6)T. \[6,8)T.' "$TMP/out" \
-    && ok "quantum reveza tarefas empatadas a cada 2 ticks" || falha "rodízio por quantum"
+roda exemplos/quantum_empate_total.txt > "$TMP/out"
+grep -q 'CPU0: \[0,6)T. \[6,12)T.' "$TMP/out" \
+    && ok "fim de quantum não tira a tarefa da CPU (critério 1)" || falha "quantum x critério 1"
+roda exemplos/quantum_respeita_prazo.txt > "$TMP/out"
+grep -q 'CPU0: \[0,4)T1 \[4,8)T2' "$TMP/out" && grep -q 'Nenhum prazo perdido' "$TMP/out" \
+    && ok "fim de quantum não passa por cima do critério 2 (prazo)" || falha "quantum x critério 2"
 
 echo "== Determinismo"
 roda tests/validos/16_quarenta_tarefas.txt > "$TMP/a"

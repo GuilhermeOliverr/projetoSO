@@ -28,6 +28,7 @@ typedef enum {
     EV_PRAZO_PERDIDO,  /* ativação passou do deadline              */
     EV_SORTEIO,        /* tarefa escolhida por sorteio (critério 5) */
     EV_PREEMPCAO,      /* tarefa perdeu a CPU                      */
+    EV_FIM_QUANTUM,    /* quantum esgotado: escalonador reavaliou  */
     EV_QTD
 } TipoEvento;
 
