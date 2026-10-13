@@ -24,10 +24,22 @@ const char *estado_nome(EstadoTarefa e) {
     case T_PRONTA: return "pronta";
     case T_EXECUTANDO: return "executando";
     case T_SUSPENSA: return "suspensa";
-    case T_ESPERANDO: return "aguardando próximo período";
     case T_TERMINADA: return "terminada";
     }
     return "?";
+}
+
+const char *estado_descricao(const TCB *k) {
+    if (k->estado != T_SUSPENSA) return estado_nome(k->estado);
+    switch (k->motivo) {
+    case SUSP_PERIODO: return "suspensa: próximo período";
+    case SUSP_USUARIO: return "suspensa: pelo usuário";
+    default: return "suspensa";
+    }
+}
+
+bool suspensa_pelo_usuario(const TCB *k) {
+    return k->estado == T_SUSPENSA && k->motivo == SUSP_USUARIO;
 }
 
 const char *evento_nome(TipoEvento t) {
@@ -246,7 +258,12 @@ static void executar_tick(Simulador *s) {
          * começa assim que a anterior acabar (ver README, decisões). */
         if (k->restante == 0) {
             iniciar_ativacao(k);
-            if (k->estado != T_SUSPENSA) k->estado = T_PRONTA;
+            /* Suspensa pelo usuário continua suspensa (a ativação fica
+             * esperando a retomada); a espera pelo período acabou. */
+            if (!suspensa_pelo_usuario(k)) {
+                k->estado = T_PRONTA;
+                k->motivo = SUSP_NENHUM;
+            }
         }
     }
 
@@ -270,8 +287,12 @@ static void executar_tick(Simulador *s) {
             k->ticks_espera++;
             break;
         case T_SUSPENSA:
-            s->cel[base + i] = G_SUSPENSA;
-            k->ticks_suspensa++;
+            /* Esperar o próximo período fica vazio no Gantt, como nas
+             * figuras do capítulo; preto pontilhado é a suspensão de fato. */
+            if (k->motivo == SUSP_USUARIO) {
+                s->cel[base + i] = G_SUSPENSA;
+                k->ticks_suspensa++;
+            }
             break;
         default:
             break;
@@ -298,7 +319,8 @@ static void executar_tick(Simulador *s) {
                 iniciar_ativacao(k);
                 k->estado = T_PRONTA;
             } else {
-                k->estado = T_ESPERANDO;
+                k->estado = T_SUSPENSA;
+                k->motivo = SUSP_PERIODO;
                 k->cpu = -1;
             }
         }
@@ -362,7 +384,8 @@ bool sim_bloqueado(const Estado *e) {
     for (int i = 0; i < e->n; i++) {
         EstadoTarefa st = e->tarefas[i].estado;
         if (st == T_TERMINADA) continue;
-        if (st != T_SUSPENSA) return false;
+        /* Quem espera o período volta sozinha; só o usuário trava a tarefa. */
+        if (!suspensa_pelo_usuario(&e->tarefas[i])) return false;
         alguma = true;
     }
     return alguma;

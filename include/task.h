@@ -15,14 +15,28 @@
 /* Projeto A: toda tarefa periódica "termina" após 10 ativações (req. 4.4). */
 #define MAX_ATIVACOES 10
 
+/* Os 5 estados do ciclo de vida de uma tarefa (Maziero, cap. 4, seção 4.4). */
 typedef enum {
     T_NOVA,        /* ainda não chegou ao sistema (antes do ingresso)          */
     T_PRONTA,      /* tem ativação pendente e está na fila global de prontos    */
     T_EXECUTANDO,  /* ocupando uma CPU neste tick                               */
-    T_SUSPENSA,    /* tirada da disputa (Projeto A: só por edição manual)       */
-    T_ESPERANDO,   /* ativação atual concluída, aguardando o próximo período    */
+    T_SUSPENSA,    /* não pode executar: o motivo fica em TCB.motivo            */
     T_TERMINADA    /* concluiu as 10 ativações                                  */
 } EstadoTarefa;
+
+/* Por que uma tarefa está SUSPENSA. O Maziero inclui em "suspensa" tanto a
+ * espera por um recurso quanto a espera pelo tempo passar (sleep); aqui o
+ * motivo decide como a tarefa sai da suspensão e como aparece no Gantt.
+ * O Projeto B vai acrescentar motivos como mutex e E/S. */
+typedef enum {
+    SUSP_NENHUM,   /* a tarefa não está suspensa                                */
+    SUSP_PERIODO,  /* ativação concluída, esperando o próximo período: volta
+                      sozinha para PRONTA quando a próxima ativação chega. No
+                      Gantt fica vazia, como nas figuras 2.5 e 2.6 do capítulo. */
+    SUSP_USUARIO   /* suspensa pelo usuário no passo a passo: só volta quando
+                      for retomada; chegadas não a tiram da suspensão. No Gantt
+                      aparece em preto pontilhado.                             */
+} MotivoSuspensao;
 
 typedef struct {
     /* ---- definidos no arquivo de configuração ---- */
@@ -40,6 +54,7 @@ typedef struct {
 
     /* ---- estado dinâmico ---- */
     EstadoTarefa estado;
+    MotivoSuspensao motivo;    /* só vale quando estado == T_SUSPENSA         */
     int liberadas;             /* ativações que já chegaram (0..10)              */
     int concluidas;            /* ativações já terminadas (0..10)                */
     int chegadas[MAX_ATIVACOES]; /* instante de chegada de cada ativação         */
@@ -73,5 +88,10 @@ typedef struct {
 } TCB;
 
 const char *estado_nome(EstadoTarefa e);
+/* Estado com o motivo, quando suspensa ("suspensa: próximo período"). */
+const char *estado_descricao(const TCB *k);
+/* Suspensa pelo usuário: a única suspensão que impede a tarefa de progredir
+ * sozinha no Projeto A. */
+bool suspensa_pelo_usuario(const TCB *k);
 
 #endif

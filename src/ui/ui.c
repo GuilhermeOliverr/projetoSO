@@ -449,7 +449,7 @@ static void detalhes_tarefa(const Simulador *s, int i) {
     printf("  eventos (Projeto B): %d", k->neventos);
     for (int j = 0; j < k->neventos; j++) printf("%s%s", j ? " | " : ": ", k->eventos[j]);
     putchar('\n');
-    printf("  estado: %s\n", estado_nome(k->estado));
+    printf("  estado: %s\n", estado_descricao(k));
     if (k->restante > 0)
         printf("  prioridade (menor = mais prioritária): nominal %d, ativa %d\n", k->prio_nominal, k->prio_ativa);
     printf("  ativações: %d chegaram, %d concluídas (de %d)\n", k->liberadas, k->concluidas, MAX_ATIVACOES);
@@ -483,7 +483,7 @@ static void estado_sistema(const Simulador *s) {
     int *ordem = gantt_ordem(e);
     for (int r = e->n - 1; r >= 0; r--) {
         const TCB *k = &e->tarefas[ordem[r]];
-        printf("  %6d %-27s %4d/%-2d ", k->id, estado_nome(k->estado), k->concluidas, MAX_ATIVACOES);
+        printf("  %6d %-27s %4d/%-2d ", k->id, estado_descricao(k), k->concluidas, MAX_ATIVACOES);
         if (k->restante > 0) printf("%8d %8d ", k->restante, k->deadline_abs);
         else printf("%8s %8s ", "-", "-");
         if (k->cpu >= 0) printf("%5d ", k->cpu);
@@ -551,7 +551,7 @@ static void editar_tarefa(Simulador *s, int i, char *msg, size_t tam) {
            "  1) cor   2) duração   3) período   4) prazo   5) ingresso\n"
            "  6) ticks restantes da ativação atual\n"
            "  7) %s   8) encerrar a tarefa agora   0) cancelar\n",
-           t, k->estado == T_SUSPENSA ? "retomar (tirar da suspensão)" : "suspender");
+           t, suspensa_pelo_usuario(k) ? "retomar (tirar da suspensão)" : "suspender");
     char buf[32];
     if (!ler_linha("> ", buf, sizeof buf) || !*buf || buf[0] == '0') {
         fmsg(msg, tam, "Edição cancelada.");
@@ -615,7 +615,7 @@ static void editar_tarefa(Simulador *s, int i, char *msg, size_t tam) {
     case 6:
         if (k->restante <= 0) {
             fmsg(msg, tam, "erro: a tarefa %d não tem ativação em andamento (estado: %s)", k->id,
-                 estado_nome(k->estado));
+                 estado_descricao(k));
             return;
         }
         if (!pedir_int("ticks restantes", k->restante, &v, val_positivo, NULL)) return;
@@ -625,11 +625,24 @@ static void editar_tarefa(Simulador *s, int i, char *msg, size_t tam) {
         break;
     case 7:
         sim_preparar_edicao(s);
-        if (k->estado == T_SUSPENSA) {
-            k->estado = k->restante > 0 ? T_PRONTA : (k->liberadas == 0 ? T_NOVA : T_ESPERANDO);
-            fmsg(msg, tam, "Tarefa %d retomada (%s).", k->id, estado_nome(k->estado));
+        if (suspensa_pelo_usuario(k)) {
+            /* Volta para onde estaria se não tivesse sido suspensa: com
+             * ativação pendente, pronta; antes do ingresso, nova; senão,
+             * esperando o próximo período. */
+            if (k->restante > 0) {
+                k->estado = T_PRONTA;
+                k->motivo = SUSP_NENHUM;
+            } else if (k->liberadas == 0) {
+                k->estado = T_NOVA;
+                k->motivo = SUSP_NENHUM;
+            } else {
+                k->estado = T_SUSPENSA;
+                k->motivo = SUSP_PERIODO;
+            }
+            fmsg(msg, tam, "Tarefa %d retomada (%s).", k->id, estado_descricao(k));
         } else {
             k->estado = T_SUSPENSA;
+            k->motivo = SUSP_USUARIO;
             k->cpu = -1;
             fmsg(msg, tam, "Tarefa %d suspensa: não disputa CPU até ser retomada (ativações "
                  "continuam chegando e acumulando).", k->id);
@@ -638,6 +651,7 @@ static void editar_tarefa(Simulador *s, int i, char *msg, size_t tam) {
     case 8:
         sim_preparar_edicao(s);
         k->estado = T_TERMINADA;
+        k->motivo = SUSP_NENHUM;
         k->restante = 0;
         k->cpu = -1;
         k->termino = t;
