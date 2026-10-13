@@ -10,6 +10,7 @@
 # imagens geradas pelo simulador
 *_gantt.svg
 
-# docs só locais: apenas o enunciado em PDF vai para o GitHub
+# docs só locais: o enunciado em PDF e a verificação de requisitos vão para o GitHub
 docs/*
 !docs/simulador-escalonamento-v20260830-enunciado.pdf
+!docs/verificacao-requisitos.md

@@ -94,6 +94,16 @@ roda exemplos/quantum_respeita_prazo.txt > "$TMP/out"
 grep -q 'CPU0: \[0,4)T1 \[4,8)T2' "$TMP/out" && grep -q 'Nenhum prazo perdido' "$TMP/out" \
     && ok "fim de quantum não passa por cima do critério 2 (prazo)" || falha "quantum x critério 2"
 
+echo "== Desempate: critério 2 usa o deadline absoluto"
+# Em t = 12 (T3 acabou), T1 (chegou em 0, prazo 20) e T2 (chegou em 10, prazo
+# 10) têm o mesmo deadline absoluto (20): o critério 2 empata e decide o
+# critério 3 (ingresso 0 < 10), então T1 vem primeiro. Com o prazo relativo
+# seria T2 (10 < 20).
+roda tests/validos/20_desempate_prazo_absoluto.txt > "$TMP/out"
+grep -q 'CPU0: \[0,12)T3 \[12,15)T1 \[15,18)T2' "$TMP/out" \
+    && ok "deadlines absolutos iguais caem no critério 3: vence o menor ingresso (T1)" \
+    || falha "critério 2 (deadline absoluto)" "$(grep 'CPU0:' "$TMP/out" | head -1 | cut -c1-100)"
+
 echo "== Determinismo"
 roda tests/validos/16_quarenta_tarefas.txt > "$TMP/a"
 roda tests/validos/16_quarenta_tarefas.txt > "$TMP/b"
@@ -110,6 +120,28 @@ grep -q 'não tem ativação em andamento' "$TMP/out" && ok "edição inválida 
 printf 'g 25\ne 2\n7\nn 10\nt 2\nq\n' | $BIN exemplos/fig2_6_rm.txt --modo passo --sem-cor > "$TMP/out" 2>&1
 grep -q 'suspensa 10 tick' "$TMP/out" && grep -q '░' "$TMP/out" && ok "suspensão aparece no estado e no Gantt" \
     || falha "suspensão"
+
+echo "== Suspensão por período x suspensão pelo usuário (SUSP_PERIODO / SUSP_USUARIO)"
+# T1 (fig. 2.5) acaba em t = 20 e só chega de novo em t = 100: nesse intervalo
+# ela está suspensa por período. Não é a suspensão do usuário, então não conta
+# como tick suspenso e não pode aparecer pontilhada no Gantt.
+printf 'g 30\nt 1\nf\nq\n' | $BIN exemplos/fig2_5_rm.txt --modo passo --sem-cor > "$TMP/out" 2>&1
+grep -q 'estado: suspensa: próximo período' "$TMP/out" && grep -q 'suspensa 0 tick(s)' "$TMP/out" \
+    && ok "esperar o período = suspensa: próximo período, sem contar tick suspenso" \
+    || falha "estado SUSP_PERIODO" "$(grep 'estado:' "$TMP/out" | head -2)"
+grep -v 'Legenda' "$TMP/out" | grep -q '░' && falha "esperar o período não pode ser pontilhado no Gantt" \
+    || ok "esperar o período fica vazio no Gantt (como nas figuras do capítulo)"
+# A próxima ativação (t = 100) tira a tarefa da suspensão sozinha.
+printf 'g 101\nt 1\nq\n' | $BIN exemplos/fig2_5_rm.txt --modo passo --sem-cor > "$TMP/out" 2>&1
+grep -q 'estado: executando' "$TMP/out" && ok "a chegada da próxima ativação encerra a suspensão por período" \
+    || falha "SUSP_PERIODO deveria acabar sozinha" "$(grep 'estado:' "$TMP/out" | head -2)"
+# Suspensa pelo usuário em t = 30: a chegada em t = 100 NÃO a libera; só a retomada.
+printf 'g 30\ne 1\n7\ng 110\nt 1\n\ne 1\n7\nq\n' | $BIN exemplos/fig2_5_rm.txt --modo passo --sem-cor > "$TMP/out" 2>&1
+grep -q 'estado: suspensa: pelo usuário' "$TMP/out" && grep -q 'suspensa [1-9][0-9]* tick(s)' "$TMP/out" \
+    && ok "suspensão do usuário sobrevive à chegada da ativação e conta ticks" \
+    || falha "SUSP_USUARIO não pode ser desfeita pela chegada" "$(grep 'estado:' "$TMP/out" | head -2)"
+grep -q 'Tarefa 1 retomada (pronta)' "$TMP/out" && ok "retomar com ativação pendente volta para pronta" \
+    || falha "retomada de SUSP_USUARIO" "$(grep 'retomada' "$TMP/out")"
 
 echo "== Plugin dinâmico"
 if [ -f plugins/exemplo_fifo.so ]; then
