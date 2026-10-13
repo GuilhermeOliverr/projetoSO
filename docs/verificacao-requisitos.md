@@ -334,8 +334,18 @@ semântica"). Decisão: o estado `T_ESPERANDO` foi removido. A tarefa que acabou
 
 | # | Ponto | Encaminhamento |
 |---|---|---|
-| 2 | Critério 2: prazo absoluto ou relativo | Perguntar ao professor |
-| 3 | Critério 3: `ingresso` da tarefa ou chegada da ativação | Perguntar ao professor |
+| 2 | Critério 2: prazo absoluto ou relativo | Decidido: **deadline absoluto** (urgência real da ativação atual); confirmar com o professor só se sobrar tempo |
+| 3 | Critério 3: `ingresso` da tarefa ou chegada da ativação | Decidido: campo `ingresso` (como já estava) |
 | 5 | Valor de N de CPUs (hoje 64) | Equipe decide e justifica |
 | 6 | Editar `lista_eventos` durante a simulação | Acrescentar se ele pedir |
 | 7 | Escalonador devolve a prioridade, não "a próxima tarefa" | Equipe decide e justifica |
+
+### Critério 2: fica o deadline absoluto
+
+Uma análise de IA sugeriu o prazo relativo (os critérios 2, 3 e 4 usam nomes de atributos da
+tarefa; no EDF o absoluto nunca atuaria). Foi implementado e depois revertido por decisão da
+equipe: o deadline absoluto desempata pela **urgência real** da ativação atual, e a redundância no
+EDF se explica porque a lista de critérios é genérica (vale para qualquer algoritmo; no RM o
+critério atua). As duas leituras se defendem; se o professor responder, ajustar
+`sched_desempate` (`src/sched/sched_tie.c`). O critério 3 continua usando o campo `ingresso`.
+Teste: `tests/validos/20_desempate_prazo_absoluto.txt`.

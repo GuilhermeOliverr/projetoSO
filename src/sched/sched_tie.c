@@ -5,9 +5,10 @@
  *   1. a tarefa que estava executando logo antes do escalonamento (evita
  *      trocar de contexto para a própria tarefa);
  *   2. o prazo: deadline absoluto mais próximo. Usamos o absoluto (e não o
- *      prazo relativo do arquivo) porque é ele que diz quem está mais
- *      "apertado" agora; na 1ª ativação de tarefas com o mesmo ingresso os
- *      dois dão o mesmo resultado;
+ *      prazo relativo do arquivo) porque desempata pela urgência real da
+ *      ativação atual. No EDF ele repete a prioridade (que já é o deadline
+ *      absoluto): a lista de critérios é genérica, vale para qualquer
+ *      algoritmo, e é no RM que este critério atua;
  *   3. o instante de ingresso da tarefa: quem chegou antes. É o campo
  *      `ingresso` do arquivo, que o enunciado define como o instante em que
  *      a tarefa foi criada (e não a chegada da ativação atual);

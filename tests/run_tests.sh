@@ -94,6 +94,16 @@ roda exemplos/quantum_respeita_prazo.txt > "$TMP/out"
 grep -q 'CPU0: \[0,4)T1 \[4,8)T2' "$TMP/out" && grep -q 'Nenhum prazo perdido' "$TMP/out" \
     && ok "fim de quantum não passa por cima do critério 2 (prazo)" || falha "quantum x critério 2"
 
+echo "== Desempate: critério 2 usa o deadline absoluto"
+# Em t = 12 (T3 acabou), T1 (chegou em 0, prazo 20) e T2 (chegou em 10, prazo
+# 10) têm o mesmo deadline absoluto (20): o critério 2 empata e decide o
+# critério 3 (ingresso 0 < 10), então T1 vem primeiro. Com o prazo relativo
+# seria T2 (10 < 20).
+roda tests/validos/20_desempate_prazo_absoluto.txt > "$TMP/out"
+grep -q 'CPU0: \[0,12)T3 \[12,15)T1 \[15,18)T2' "$TMP/out" \
+    && ok "deadlines absolutos iguais caem no critério 3: vence o menor ingresso (T1)" \
+    || falha "critério 2 (deadline absoluto)" "$(grep 'CPU0:' "$TMP/out" | head -1 | cut -c1-100)"
+
 echo "== Determinismo"
 roda tests/validos/16_quarenta_tarefas.txt > "$TMP/a"
 roda tests/validos/16_quarenta_tarefas.txt > "$TMP/b"

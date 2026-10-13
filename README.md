@@ -184,7 +184,7 @@ Mais exemplos em `exemplos/` e `tests/validos/`.
   (M = CPUs) executam; quem já estava numa CPU continua nela (evita migração).
   CPU sem tarefa fica desligada.
 - **Desempate** (todos os algoritmos): (1) quem estava executando; (2) deadline
-  absoluto mais próximo; (3) ingresso da tarefa mais antigo (instante de
+  absoluto mais próximo (urgência real da ativação atual); (3) ingresso da tarefa mais antigo (instante de
   criação, como define o enunciado); (4) menor duração;
   (5) sorteio. O sorteio só acontece quando decide quem executa, usa um gerador
   com estado guardado no snapshot (voltar/avançar é determinístico) e aparece no Gantt.
