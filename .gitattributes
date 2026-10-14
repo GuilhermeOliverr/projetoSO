@@ -1,0 +1,5 @@
+# Força LF no checkout: scripts e Makefile quebram no WSL com CRLF
+* text=auto eol=lf
+*.pdf binary
+*.svg text eol=lf
+tests/validos/05_finais_de_linha_windows.txt -text
