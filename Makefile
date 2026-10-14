@@ -9,11 +9,29 @@ SRC = $(wildcard src/*.c src/*/*.c)
 HDR = $(wildcard include/*.h)
 TARGET = projetoSO
 
-# dlopen (plugins de escalonador): na glibc >= 2.34 já está na libc, mas
-# versões antigas precisam de -ldl. No Windows (MSYS2) os plugins ficam
-# desativados e não há -ldl.
+# Bibliotecas de cada sistema. Todas já vêm com o sistema (e o compilador):
+# nada precisa ser baixado.
+#  - Linux/WSL: -ldl para os plugins (dlopen; na glibc >= 2.34 já está na
+#    libc, mas versões antigas precisam). A janela usa só sockets da libc.
+#  - Windows (MSYS2/MinGW): gdi32 para a janela (user32 já vem por padrão);
+#    os plugins ficam desativados e não há -ldl.
+#  - macOS: os frameworks Cocoa e CoreGraphics e o runtime do Objective-C.
+# Compilar para Windows a partir do Linux: make CC=x86_64-w64-mingw32-gcc
+UNAME_S := $(shell uname -s 2>/dev/null)
 ifeq ($(OS),Windows_NT)
-LDLIBS =
+SISTEMA = windows
+else ifneq (,$(findstring mingw,$(CC)))
+SISTEMA = windows
+else ifeq ($(UNAME_S),Darwin)
+SISTEMA = macos
+else
+SISTEMA = linux
+endif
+
+ifeq ($(SISTEMA),windows)
+LDLIBS = -lgdi32
+else ifeq ($(SISTEMA),macos)
+LDLIBS = -ldl -framework Cocoa -framework CoreGraphics -lobjc
 else
 LDLIBS = -ldl
 endif

@@ -45,4 +45,31 @@ void gantt_texto(const Simulador *s);
 bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo,
                char *erro, int tam_erro);
 
+/* ---- Janela gráfica (gantt_gfx.c) ---- */
+struct Tela;
+
+/* Que pedaço do Gantt mostrar e onde. Os campos de entrada são preenchidos
+ * pela interface; `alt_conteudo` e `lbl` são devolvidos pelo desenho. */
+typedef struct {
+    int x, y, w, h;      /* retângulo da tela reservado para o gráfico     */
+    int t_ini;           /* primeiro tick visível (rolagem horizontal)     */
+    int cw;              /* largura de um tick em pixels (zoom)            */
+    int y_rol;           /* rolagem vertical em pixels                     */
+    int sel;             /* tarefa destacada (índice), ou -1               */
+    int t_marca;         /* instante atual, marcado com uma linha; -1 = não */
+    int alt_conteudo;    /* (saída) altura total do desenho                */
+    int lbl;             /* (saída) largura da coluna dos rótulos          */
+} VistaGantt;
+
+/* Desenha o Gantt dos ticks visíveis: tarefas (maior id em cima), eixo do
+ * tempo e uma linha por CPU, com os mesmos símbolos do SVG. */
+void gantt_gfx(struct Tela *t, const Simulador *s, VistaGantt *v);
+
+/* Índice da tarefa cuja linha está em (x, y), ou -1. */
+int gantt_gfx_tarefa_em(const Simulador *s, const VistaGantt *v, int x, int y);
+
+/* Legenda com todos os símbolos, quebrando linha para caber em `w`.
+ * Devolve a altura usada. Com `desenhar` false só mede. */
+int gantt_gfx_legenda(struct Tela *t, int x, int y, int w, bool desenhar);
+
 #endif

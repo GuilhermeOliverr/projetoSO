@@ -4,7 +4,9 @@
  * A interface é baseada em comandos de uma letra digitados no terminal,
  * como num debugger (gdb): é fácil de usar, não precisa de biblioteca de
  * interface e funciona igual em Linux, WSL e MSYS2. Toda entrada inválida é
- * recusada com o motivo, e Enter sem nada mantém o valor sugerido.
+ * recusada com o motivo, e Enter sem nada mantém o valor sugerido. A janela
+ * gráfica (ui_gui.c) oferece o mesmo, com botões; esta interface é usada com
+ * --terminal, com --modo, ou quando não há servidor gráfico.
  *
  * Mapa do arquivo (na ordem em que aparece):
  *   1. utilitários de mensagem e de leitura (pedir_int, pedir_cor, validadores);
@@ -17,6 +19,7 @@
  * com gantt_* (gantt_*.c).
  */
 #include "ui.h"
+#include "edicao.h"
 #include "gantt.h"
 #include "util.h"
 
@@ -94,24 +97,11 @@ static bool pedir_cor(unsigned sugerida, unsigned *out) {
     }
 }
 
-static const char *val_positivo(int v, const void *ctx) {
-    (void)ctx;
-    return v > 0 ? NULL : "o valor deve ser maior que zero";
-}
-
-static const char *val_periodo(int v, const void *ctx) {
-    (void)ctx;
-    if (v == 0) return "período 0 significa tarefa aperiódica, que o Projeto A não simula";
-    return v > 0 ? NULL : "o período deve ser maior que zero";
-}
-
-static const char *val_min(int v, const void *ctx) {
-    static char buf[128];
-    int min = *(const int *)ctx;
-    if (v >= min) return NULL;
-    snprintf(buf, sizeof buf, "o valor deve ser >= %d (não dá para chegar no passado)", min);
-    return buf;
-}
+/* As regras em si ficam em edicao.c (a janela usa as mesmas); estes
+ * adaptadores só encaixam cada uma no formato Validador. */
+static const char *val_positivo(int v, const void *ctx) { (void)ctx; return valida_positivo(v); }
+static const char *val_periodo(int v, const void *ctx) { (void)ctx; return valida_periodo(v); }
+static const char *val_min(int v, const void *ctx) { return valida_ingresso(v, *(const int *)ctx); }
 
 static const char *val_quantum(int v, const void *ctx) { (void)ctx; return config_validar_quantum(v); }
 /* Rótulo do prompt de CPUs com o limite N à vista (steering, ambig. 6).
@@ -128,14 +118,8 @@ static const char *val_cpus(int v, const void *ctx) { (void)ctx; return config_v
 typedef struct { const int *ids; int n; int proprio; } CtxIds;
 
 static const char *val_id(int v, const void *ctx) {
-    static char buf[96];
     const CtxIds *c = ctx;
-    for (int i = 0; i < c->n; i++)
-        if (i != c->proprio && c->ids[i] == v) {
-            snprintf(buf, sizeof buf, "já existe uma tarefa com id %d", v);
-            return buf;
-        }
-    return NULL;
+    return valida_id(v, c->ids, c->n, c->proprio);
 }
 
 /* Escolhe um algoritmo pelo nome ou número. -1 = cancelado. */
@@ -371,7 +355,7 @@ char ui_pedir_modo(void) {
 /* Nome do SVG de saída: o informado em --saida, ou "<nome do arquivo de
  * configuração sem pasta e sem extensão>_gantt.svg" (ex.: fig2_5_rm.txt ->
  * fig2_5_rm_gantt.svg). Aceita '/' e '\' como separadores (Linux e Windows). */
-static void caminho_svg_padrao(const Config *cfg, const OpcoesUI *op, char *dst, size_t tam) {
+void ui_caminho_svg(const Config *cfg, const OpcoesUI *op, char *dst, size_t tam) {
     if (op->saida_svg) { snprintf(dst, tam, "%s", op->saida_svg); return; }
     /* nome do arquivo de configuração, sem diretório nem extensão */
     const char *c = cfg->caminho ? cfg->caminho : "simulacao";
@@ -471,7 +455,7 @@ int ui_execucao_completa(const Config *cfg, const OpcoesUI *op) {
     if (op->texto) gantt_texto(&s);
     estatisticas(&s);
     char caminho[1024], msg[1400];
-    caminho_svg_padrao(cfg, op, caminho, sizeof caminho);
+    ui_caminho_svg(cfg, op, caminho, sizeof caminho);
     bool ok = exportar(&s, cfg, caminho, msg, sizeof msg);
     if (ok) printf("%s\n", msg);
     else ui_erro("%s", msg + strlen("erro ao exportar: "));
@@ -640,17 +624,14 @@ static void editar_tarefa(Simulador *s, int i, char *msg, size_t tam) {
     case 3:
         if (!pedir_int("período", k->periodo, &v, val_periodo, NULL)) return;
         sim_preparar_edicao(s);
-        k->periodo = v;
-        if (k->liberadas > 0 && k->liberadas < MAX_ATIVACOES)
-            k->proxima_chegada = k->chegadas[k->liberadas - 1] + v;
+        edicao_periodo(k, v);
         fmsg(msg, tam, "Período da tarefa %d = %d; próxima chegada no instante %d%s.", k->id, v,
              k->proxima_chegada, k->proxima_chegada < t ? " (já passou: chega no próximo tick)" : "");
         break;
     case 4:
         if (!pedir_int("prazo", k->prazo, &v, val_positivo, NULL)) return;
         sim_preparar_edicao(s);
-        k->prazo = v;
-        if (k->restante > 0) k->deadline_abs = k->chegada_atual + v;
+        edicao_prazo(k, v);
         fmsg(msg, tam, "Prazo da tarefa %d = %d%s.", k->id, v,
              k->restante > 0 ? "; deadline da ativação atual recalculado" : "");
         break;
@@ -662,8 +643,7 @@ static void editar_tarefa(Simulador *s, int i, char *msg, size_t tam) {
         }
         if (!pedir_int("ingresso", k->ingresso < t ? t : k->ingresso, &v, val_min, &t)) return;
         sim_preparar_edicao(s);
-        k->ingresso = v;
-        k->proxima_chegada = v;
+        edicao_ingresso(k, v);
         fmsg(msg, tam, "Ingresso da tarefa %d = %d.", k->id, v);
         break;
     case 6:
@@ -679,36 +659,16 @@ static void editar_tarefa(Simulador *s, int i, char *msg, size_t tam) {
         break;
     case 7:
         sim_preparar_edicao(s);
-        if (suspensa_pelo_usuario(k)) {
-            /* Volta para onde estaria se não tivesse sido suspensa: com
-             * ativação pendente, pronta; antes do ingresso, nova; senão,
-             * esperando o próximo período. */
-            if (k->restante > 0) {
-                k->estado = T_PRONTA;
-                k->motivo = SUSP_NENHUM;
-            } else if (k->liberadas == 0) {
-                k->estado = T_NOVA;
-                k->motivo = SUSP_NENHUM;
-            } else {
-                k->estado = T_SUSPENSA;
-                k->motivo = SUSP_PERIODO;
-            }
+        edicao_alternar_suspensao(k);
+        if (!suspensa_pelo_usuario(k))
             fmsg(msg, tam, "Tarefa %d retomada (%s).", k->id, estado_descricao(k));
-        } else {
-            k->estado = T_SUSPENSA;
-            k->motivo = SUSP_USUARIO;
-            k->cpu = -1;
+        else
             fmsg(msg, tam, "Tarefa %d suspensa: não disputa CPU até ser retomada (ativações "
                  "continuam chegando e acumulando).", k->id);
-        }
         break;
     case 8:
         sim_preparar_edicao(s);
-        k->estado = T_TERMINADA;
-        k->motivo = SUSP_NENHUM;
-        k->restante = 0;
-        k->cpu = -1;
-        k->termino = t;
+        edicao_encerrar(k, t);
         fmsg(msg, tam, "Tarefa %d encerrada no instante %d.", k->id, t);
         break;
     }
@@ -757,7 +717,7 @@ void ui_passo_a_passo(const Config *cfg, const OpcoesUI *op) {
     config_padrao(&extras);
     char msg[1600] = "";
     char caminho_svg[1024];
-    caminho_svg_padrao(cfg, op, caminho_svg, sizeof caminho_svg);
+    ui_caminho_svg(cfg, op, caminho_svg, sizeof caminho_svg);
     bool exportado = false;
     int janela_ini = -1;  /* -1 = a janela acompanha o relógio */
     char buf[256];

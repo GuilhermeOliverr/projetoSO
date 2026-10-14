@@ -12,6 +12,7 @@
 #include "config.h"
 #include "sim.h"
 
+#include <stddef.h>
 #include <stdint.h>
 
 typedef struct {
@@ -36,5 +37,18 @@ char ui_pedir_modo(void);
 void ui_passo_a_passo(const Config *cfg, const OpcoesUI *op);
 /* Devolve o código de saída do programa (0 = ok). */
 int ui_execucao_completa(const Config *cfg, const OpcoesUI *op);
+
+/* Nome do SVG de saída: o de --saida, ou "<nome do config>_gantt.svg". */
+void ui_caminho_svg(const Config *cfg, const OpcoesUI *op, char *dst, size_t tam);
+
+/* ---- ui_gui.c: a mesma interface, numa janela gráfica ---- */
+
+/* Abre a janela. Devolve false com o motivo se não houver interface
+ * gráfica (ex.: terminal sem servidor gráfico); aí usa-se o terminal. */
+bool ui_gui_iniciar(char *erro, int tam_erro);
+
+/* Roda o programa inteiro na janela: escolher arquivo (se `arquivo` for
+ * NULL ou inválido), configurar, simular. Devolve o código de saída. */
+int ui_gui_executar(const char *arquivo, const OpcoesUI *op);
 
 #endif

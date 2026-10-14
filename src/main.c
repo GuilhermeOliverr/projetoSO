@@ -4,10 +4,12 @@
  * Uso:
  *   projetoSO [arquivo] [opções]
  *
- * Sem argumentos, o programa pergunta o caminho do arquivo (qualquer nome,
- * qualquer diretório ou disco - req. 3.3.4), mostra a configuração com os
- * valores padrão para edição e depois pergunta o modo de execução.
- * Com --modo, roda sem perguntas (útil para scripts e para a defesa).
+ * Por padrão o programa abre uma janela gráfica (ui_gui.c) onde se escolhe o
+ * arquivo (qualquer nome, qualquer diretório ou disco - req. 3.3.4), se
+ * revisa/edita a configuração e se roda a simulação. Se não houver
+ * interface gráfica (ex.: SSH, terminal sem servidor gráfico), ou com
+ * --terminal, usa a interface de texto (ui.c), que faz o mesmo no terminal.
+ * Com --modo, roda sem perguntas no terminal (útil para scripts e testes).
  */
 #define _POSIX_C_SOURCE 200809L
 
@@ -36,6 +38,7 @@ static void uso(const char *prog) {
            "  --semente N            semente do sorteio de desempate (padrão: 1; 0 = relógio)\n"
            "  --plugin LIB.so        carrega um escalonador de uma biblioteca dinâmica\n"
            "  --sem-cor              desliga as cores ANSI\n"
+           "  --terminal             usa a interface de texto em vez da janela gráfica\n"
            "  -h, --help             mostra esta ajuda\n\n"
            "Formato do arquivo:\n"
            "  algoritmo_escalonamento;quantum;qtde_cpus\n"
@@ -57,6 +60,7 @@ int main(int argc, char **argv) {
     const char *arquivo = NULL;   /* caminho do arquivo de configuração       */
     const char *modo = NULL;      /* "passo"/"a" ou "completo"/"b"            */
     bool validar = false;         /* --validar: só confere o arquivo e sai    */
+    bool terminal = false;        /* --terminal: não abre a janela gráfica    */
     /* OpcoesUI = {arquivo do SVG, mostrar texto no modo completo, semente} */
     OpcoesUI op = {NULL, false, 1};
 
@@ -77,6 +81,8 @@ int main(int argc, char **argv) {
             return 0;
         } else if (!strcmp(a, "--sem-cor")) {
             g_usar_cores = false;
+        } else if (!strcmp(a, "--terminal")) {
+            terminal = true;
         } else if (!strcmp(a, "--texto")) {
             op.texto = true;
         } else if (!strcmp(a, "--validar")) {
@@ -113,6 +119,20 @@ int main(int argc, char **argv) {
             fprintf(stderr, "erro: mais de um arquivo informado ('%s' e '%s')\n", arquivo, a);
             return 2;
         }
+    }
+
+    /* Interface gráfica: só no uso interativo (sem --modo/--validar) e com
+     * o teclado de verdade ligado ao programa (entrada redirecionada indica
+     * um script, que espera o terminal). Se a janela não abrir, avisa o
+     * motivo e segue no terminal: o programa nunca fica sem interface. */
+    bool interativo = true;
+#ifndef _WIN32
+    interativo = isatty(STDIN_FILENO);
+#endif
+    if (!modo && !validar && !terminal && interativo) {
+        char erro[512];
+        if (ui_gui_iniciar(erro, sizeof erro)) return ui_gui_executar(arquivo, &op);
+        printf("Interface gráfica indisponível (%s); usando o terminal.\n\n", erro);
     }
 
     /* Etapa 2: obter a configuração. Começa com os valores padrão (req. 3.2);
