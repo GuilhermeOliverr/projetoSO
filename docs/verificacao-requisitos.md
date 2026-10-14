@@ -349,3 +349,19 @@ EDF se explica porque a lista de critérios é genérica (vale para qualquer alg
 critério atua). As duas leituras se defendem; se o professor responder, ajustar
 `sched_desempate` (`src/sched/sched_tie.c`). O critério 3 continua usando o campo `ingresso`.
 Teste: `tests/validos/20_desempate_prazo_absoluto.txt`.
+
+## Decisões da equipe para a defesa (2026-10-13)
+
+O professor deixou estes pontos em aberto de propósito: cada escolha vale se for argumentada. Base: capítulo "Escalonamento de Tempo Real" (`docs/cap2-escalonamento-tempo-real.md`, versão do commit `821954b`) e enunciado v0.6.
+
+| # | Ponto | Decisão | Argumento |
+|---|---|---|---|
+| 2 | Critério 2 do desempate | **Deadline absoluto** da ativação atual | O capítulo ordena por deadline absoluto, d_ik = (k−1)P_i + D_i, e o EDF escolhe "o deadline mais próximo do tempo atual". Desempatar pela urgência real da ativação é coerente com isso. No EDF o critério nunca atua porque a lista de critérios é genérica (vale para qualquer algoritmo); no RM atua. |
+| 3 | Critério 3 do desempate | Campo **`ingresso`** da tarefa | O enunciado diz "instante de ingresso da tarefa" e define `ingresso` como o instante em que a tarefa foi criada. É a leitura literal. |
+| 5 | N de CPUs | **64** (`MAX_CPUS` em `include/config.h`) | O enunciado não fixa N. 64 cobre qualquer máquina real de aula e o limite aparece na tela; trocar é mudar uma constante. Sem tabelas de tamanho fixo: o resto é alocado dinamicamente. |
+| 6 | Editar `lista_eventos` durante a simulação | Só **antes** de simular | O 3.3.5 diz que os eventos são tratados no Projeto B; no A eles não alteram a execução, então editá-los durante a simulação não teria efeito observável. A estrutura (vetor dinâmico por tarefa) já permite acrescentar o comando quando o B definir o formato. |
+| 7 | Escalonador devolve prioridade | **Função `prioridade(k, agora)`**, não "a próxima tarefa" | O enunciado diz "idealmente". Com M CPUs e fila global é preciso escolher as M melhores, e o desempate (critérios 1 a 5) fica num lugar só, igual para todo algoritmo. O capítulo trata RM, EDF e DM como formas de atribuir prioridade sobre o mesmo mecanismo. Novos algoritmos entram por tabela de registro ou por `.so` sem tocar na simulação. |
+| 1 | Quantum | Lido e guardado; RM/EDF decidem só por prioridade | Resposta do professor: usar o quantum é "específico de cada escalonador". |
+| 4 | Entre ativações | `T_SUSPENSA` com `motivo = SUSP_PERIODO`, desenhada vazia | Maziero inclui espera por tempo em "suspensa"; o Gantt segue as Figuras 2.5 e 2.6 do capítulo. |
+
+Também fica registrado: o repositório agora tem `.gitattributes` com `eol=lf`, porque no Windows o `core.autocrlf=true` convertia `tests/run_tests.sh` e os exemplos para CRLF e o `make test` quebrava no WSL. O arquivo `tests/validos/05_finais_de_linha_windows.txt` é exceção (`-text`), pois testa justamente CRLF.
