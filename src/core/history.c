@@ -10,6 +10,13 @@
  * Editar o estado num instante passado invalida o que veio depois, como
  * num debugger: snapshots, colunas do Gantt e eventos futuros são
  * descartados e a simulação segue a partir do estado editado.
+ *
+ * Este arquivo guarda TRÊS coisas diferentes, cada uma com seu papel:
+ *   1. snaps[t]  - o estado completo do sistema no instante t (para voltar);
+ *   2. cel/cpu   - o "rastro": o que cada tarefa fez em cada tick (para o
+ *                  Gantt). Fica à parte para o gráfico não depender de reler
+ *                  snapshots;
+ *   3. ev        - a lista de eventos (chegadas, perdas de prazo, ...).
  */
 #include "sim.h"
 #include "util.h"
@@ -17,14 +24,18 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Copia um Estado inteiro (relógio, CPUs, gerador aleatório e TODOS os
+ * TCBs). O truque é que o TCB não tem ponteiros para memória própria
+ * (ver task.h), então copiar o vetor com memcpy já é uma cópia profunda
+ * correta. Só o vetor `tarefas` precisa de memória própria em cada Estado. */
 void estado_copiar(Estado *dst, const Estado *src) {
-    TCB *buf = dst->tarefas;
+    TCB *buf = dst->tarefas;     /* guarda o vetor que o destino já tinha   */
     int cap_antiga = dst->n;
-    *dst = *src;
+    *dst = *src;                  /* copia os campos simples (t, rng, ...)  */
     /* Reaproveita o vetor de destino se já tiver o tamanho certo. */
     if (cap_antiga != src->n || !buf) buf = xrealloc(buf, (size_t)(src->n ? src->n : 1) * sizeof(TCB));
     if (src->n) memcpy(buf, src->tarefas, (size_t)src->n * sizeof(TCB));
-    dst->tarefas = buf;
+    dst->tarefas = buf;           /* o `*dst = *src` tinha sobrescrito isto */
 }
 
 void estado_liberar(Estado *e) {
@@ -33,13 +44,18 @@ void estado_liberar(Estado *e) {
     e->n = 0;
 }
 
+/* Grava o estado atual como o snapshot do instante t. O vetor snaps cresce
+ * dobrando de tamanho (256, 512, 1024...): assim o custo médio de cada
+ * gravação é constante, em vez de recopiar o vetor a cada tick. */
 void hist_gravar(Simulador *s) {
-    if (!s->historico) return;
+    if (!s->historico) return;    /* modo completo: não guardamos nada      */
     int t = s->atual.t;
     if (t >= s->capsnaps) {
         int nova = s->capsnaps ? s->capsnaps * 2 : 256;
         while (nova <= t) nova *= 2;
         s->snaps = xrealloc(s->snaps, (size_t)nova * sizeof(Estado));
+        /* A parte nova precisa vir zerada: estado_copiar espera que o
+         * ponteiro `tarefas` antigo seja NULL ou válido, nunca lixo. */
         memset(s->snaps + s->capsnaps, 0, (size_t)(nova - s->capsnaps) * sizeof(Estado));
         s->capsnaps = nova;
     }
@@ -47,12 +63,15 @@ void hist_gravar(Simulador *s) {
     if (t + 1 > s->nsnaps) s->nsnaps = t + 1;
 }
 
+/* Descarta o "futuro" depois do instante t (usado antes de uma edição). */
 void hist_truncar(Simulador *s, int t) {
     if (s->historico) {
         for (int k = t + 1; k < s->nsnaps; k++) estado_liberar(&s->snaps[k]);
         if (s->nsnaps > t + 1) s->nsnaps = t + 1;
     }
-    /* Colunas >= t e eventos gerados em ticks >= t pertencem ao futuro. */
+    /* Colunas >= t e eventos gerados em ticks >= t pertencem ao futuro.
+     * Para os eventos fazemos uma compactação in-place: copiamos para a
+     * frente só os que ficam (índice j) e depois ajustamos o total. */
     if (s->ncols > t) s->ncols = t;
     int j = 0;
     for (int i = 0; i < s->nev; i++)
@@ -60,10 +79,15 @@ void hist_truncar(Simulador *s, int t) {
     s->nev = j;
 }
 
+/* Volta (ou avança) o estado atual para o snapshot guardado do instante t. */
 void hist_carregar(Simulador *s, int t) {
     estado_copiar(&s->atual, &s->snaps[t]);
 }
 
+/* Garante que existe espaço para a coluna do tick `tick` e a deixa "limpa"
+ * (todas as células vazias, nenhuma CPU). O rastro é uma tabela com uma
+ * linha por tick e uma coluna por tarefa, guardada num vetor 1D
+ * (índice = tick * largura + tarefa). */
 void rastro_garantir_coluna(Simulador *s, int tick) {
     if (tick >= s->capcols) {
         int nova = s->capcols ? s->capcols * 2 : 256;
@@ -77,10 +101,16 @@ void rastro_garantir_coluna(Simulador *s, int tick) {
     size_t w = (size_t)s->largura;
     memset(s->cel + (size_t)tick * w, G_VAZIO, w);
     memset(s->cpu + (size_t)tick * w, -1, w);
+    /* Guardamos quantas CPUs existiam NESTE tick: o usuário pode mudar a
+     * quantidade durante a simulação, e o Gantt antigo precisa lembrar. */
     s->ncpus_col[tick] = (unsigned char)s->atual.ncpus;
     if (tick + 1 > s->ncols) s->ncols = tick + 1;
 }
 
+/* Quando o usuário adiciona uma tarefa, a tabela ganha uma coluna. Como o
+ * layout é "tick * largura + tarefa", mudar a largura muda a posição de
+ * TODAS as células: por isso reconstruímos a tabela inteira copiando linha
+ * por linha. */
 void rastro_ajustar_largura(Simulador *s, int largura) {
     if (largura <= s->largura) return;
     /* Refaz o layout: as colunas antigas ganham G_VAZIO para a tarefa nova
@@ -103,6 +133,10 @@ void rastro_ajustar_largura(Simulador *s, int largura) {
     s->largura = largura;
 }
 
+/* Acrescenta um evento à lista. `tick` é quando o simulador o gerou (usado
+ * para descartar ao editar); `instante` é o momento exato a desenhar no
+ * Gantt (req. 2.2: "no momento exato em que acontecem"). Para fim de
+ * ativação, por exemplo, tick = t mas instante = t+1. */
 void evento_add(Simulador *s, int tick, int instante, TipoEvento tipo, int tarefa, int ativ, int cpu) {
     if (s->nev == s->capev) {
         s->capev = s->capev ? s->capev * 2 : 256;

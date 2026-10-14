@@ -10,6 +10,13 @@
  * Layout (de cima para baixo): título e resumo; bloco das tarefas (maior
  * id em cima, menor id junto do eixo X); eixo do tempo; bloco das CPUs;
  * legenda.
+ *
+ * Como ler um SVG: é um arquivo de texto com "desenhos" em XML. <rect> é
+ * um retângulo, <line> uma linha, <text> um texto, <path> uma forma livre
+ * (M = mover o lápis, L = traçar linha até, V = linha vertical, Z = fechar).
+ * Coordenadas em pixels: x cresce para a direita e y cresce PARA BAIXO. As
+ * cores e estilos ficam num bloco <style> (classes CSS) para o desenho em
+ * si ficar curto: class="exec", class="susp", etc.
  */
 #include "gantt.h"
 #include "util.h"
@@ -19,13 +26,15 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MARGEM_ESQ   90
-#define TOPO         78
+/* Medidas do layout, em pixels. */
+#define MARGEM_ESQ   90     /* espaço à esquerda para os rótulos T1, T2... */
+#define TOPO         78     /* espaço no alto para título e resumo        */
 #define ALT_LINHA    40     /* altura de uma linha de tarefa              */
 #define ALT_BARRA    18
 #define ALT_CPU      26     /* altura de uma linha de CPU                 */
 
-/* Escreve texto escapando os caracteres especiais do XML. */
+/* Escreve texto escapando os caracteres especiais do XML. Sem isto, um
+ * título com "<" ou "&" (ex.: nome de arquivo) quebraria o SVG. */
 static void esc(FILE *f, const char *s) {
     for (; *s; s++) {
         switch (*s) {
@@ -49,6 +58,11 @@ static int largura_tick(int T) {
     return 3;
 }
 
+/* Os cinco desenhos abaixo são os marcadores de evento (req. 2.2). Cada um
+ * é pequeno e distinto, para a legenda explicar sem ambiguidade:
+ *   seta para baixo = chegada     triângulo para cima = fim de ativação
+ *   quadrado cheio  = término     X vermelho          = perda de prazo
+ *   círculo roxo '?' = sorteio    (x, y = onde desenhar)                */
 static void seta_baixo(FILE *f, double x, double y) {
     fprintf(f, "<path class=\"chegada\" d=\"M%.1f %.1f V%.1f M%.1f %.1f L%.1f %.1f L%.1f %.1f Z\"/>\n",
             x, y, y + 11, x - 4, y + 7, x, y + 13, x + 4, y + 7);
@@ -73,6 +87,8 @@ static void sorteio(FILE *f, double x, double y) {
             "<text class=\"sorteio-t\" x=\"%.1f\" y=\"%.1f\">?</text>\n", x, y, x, y + 3.5);
 }
 
+/* Gera o arquivo SVG da simulação INTEIRA (T = número de ticks simulados).
+ * Devolve false e escreve o motivo em `erro` se não conseguir gravar. */
 bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char *erro, int tam_erro) {
     FILE *f = fopen(caminho, "w");
     if (!f) {
@@ -81,11 +97,16 @@ bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char
     }
     const Estado *e = &s->atual;
     int n = e->n, T = s->ncols;
-    int cw = largura_tick(T);
+    int cw = largura_tick(T);     /* largura de 1 tick em pixels (cell width) */
+    /* Quantidade de CPUs a desenhar: o maior valor que existiu em algum
+     * tick (o usuário pode ter mudado a quantidade durante a simulação). */
     int ncpu = e->ncpus;
     for (int t = 0; t < T; t++)
         if (s->ncpus_col[t] > ncpu) ncpu = s->ncpus_col[t];
 
+    /* Posições verticais, de cima para baixo: tarefas -> eixo -> CPUs ->
+     * legenda. A largura total acompanha o número de ticks (sem limite de
+     * tempo, req. 2.4), com um mínimo de 980 para caber a legenda. */
     int y_eixo = TOPO + n * ALT_LINHA;
     int y_cpus = y_eixo + 58;
     int y_leg = y_cpus + ncpu * ALT_CPU + 28;
@@ -136,7 +157,9 @@ bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char
             esc_alg ? esc_alg->nome : "?", e->ncpus, e->quantum, sim_utilizacao(e), T, perdidos,
             e->fim ? "" : " · (simulação incompleta)");
 
-    /* grade vertical e eixo */
+    /* grade vertical e eixo. `passo` = de quantos em quantos ticks vai um
+     * número; escolhemos o primeiro valor da lista que dê pelo menos 28px
+     * entre números, para eles não se sobreporem. */
     int passo = 1;
     static const int passos[] = {1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 100000};
     for (size_t p = 0; p < sizeof passos / sizeof passos[0]; p++) {
@@ -167,7 +190,9 @@ bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char
                 MARGEM_ESQ - 10, yb + ALT_BARRA - 4, k->cor, k->id);
         fprintf(f, "<line class=\"base\" x1=\"%d\" y1=\"%d\" x2=\"%d\" y2=\"%d\"/>\n",
                 MARGEM_ESQ, yb + ALT_BARRA, MARGEM_ESQ + T * cw, yb + ALT_BARRA);
-        /* trechos contínuos com o mesmo estado e a mesma CPU */
+        /* trechos contínuos com o mesmo estado e a mesma CPU: em vez de um
+         * retângulo por tick (milhares no arquivo), agrupamos ticks seguidos
+         * iguais num retângulo só. t2 avança enquanto nada muda. */
         for (int t = 0; t < T;) {
             CelulaGantt c = sim_celula(s, t, i);
             int cpu = sim_cpu_celula(s, t, i);
@@ -208,7 +233,10 @@ bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char
         }
     }
 
-    /* bloco das CPUs */
+    /* bloco das CPUs (req. 1.2 e 2.1): uma linha por CPU mostrando qual
+     * tarefa a ocupou em cada trecho; trecho sem tarefa = CPU desligada
+     * (hachurado cinza). `quem` = índice da tarefa que usou a CPU c no tick
+     * t (-1 = ninguém), achado procurando qual tarefa registrou aquela CPU. */
     fprintf(f, "<text class=\"rot\" x=\"%d\" y=\"%d\" style=\"text-anchor:start\">Processadores</text>\n",
             16, y_cpus - 10);
     for (int c = 0; c < ncpu; c++) {
@@ -284,6 +312,8 @@ bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char
     fputs("</svg>\n", f);
     free(ordem);
     free(linha_de);
+    /* Erros de escrita (disco cheio) só aparecem de verdade no ferror/fclose,
+     * então conferimos os dois antes de dizer que deu certo. */
     bool ok = !ferror(f);
     if (fclose(f) != 0) ok = false;
     if (!ok) snprintf(erro, (size_t)tam_erro, "erro ao gravar '%s' (disco cheio?)", caminho);
