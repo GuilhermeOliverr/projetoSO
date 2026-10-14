@@ -22,11 +22,19 @@
  * a de maior prioridade. Assim a ordem 1 -> 5 do enunciado vale sempre e o
  * quantum não distorce RM/EDF (uma tarefa com deadline mais próximo nunca
  * perde a CPU para uma empatada só porque esgotou a fatia de tempo).
+ *
+ * Convenção de TODAS as funções de comparação daqui (a mesma do qsort):
+ *   resultado < 0  -> `a` vem ANTES de `b` (a é mais prioritária)
+ *   resultado > 0  -> `a` vem DEPOIS de `b`
+ *   resultado == 0 -> empate total (quem decide é o sorteio, em sim.c)
  */
 #include "sched.h"
 
+/* Critérios 1 a 4. Só é chamada quando a prioridade ativa já empatou. */
 int sched_desempate(const TCB *a, const TCB *b) {
-    /* Critério 1: `cpu` >= 0 significa que executou no tick anterior. */
+    /* Critério 1: `cpu` >= 0 significa que executou no tick anterior.
+     * `ea != eb` quer dizer que só uma das duas estava executando: ela
+     * ganha (-1 = a primeira vem antes). */
     bool ea = a->cpu >= 0, eb = b->cpu >= 0;
     if (ea != eb) return ea ? -1 : 1;
     /* Critério 2 */
@@ -39,12 +47,18 @@ int sched_desempate(const TCB *a, const TCB *b) {
     return 0;
 }
 
+/* Pergunta ao algoritmo qual a prioridade da tarefa neste tick e guarda no
+ * TCB. É chamada para cada candidata, a cada tick (EDF muda o valor a cada
+ * ativação, por isso não basta calcular uma vez). */
 void sched_atualizar(const Escalonador *e, TCB *k, int agora) {
     k->prio_nominal = e->prioridade(k, agora);
     /* Projeto B: aqui entra a herança (prio_ativa = min(nominal, herdada)). */
     k->prio_ativa = k->prio_nominal;
 }
 
+/* Comparação completa: primeiro a prioridade ATIVA (menor = melhor); só se
+ * empatar chama o desempate. É a função que o escalonador (sim.c) usa para
+ * ordenar as candidatas. */
 int sched_comparar(const TCB *a, const TCB *b) {
     if (a->prio_ativa != b->prio_ativa) return a->prio_ativa < b->prio_ativa ? -1 : 1;
     return sched_desempate(a, b);

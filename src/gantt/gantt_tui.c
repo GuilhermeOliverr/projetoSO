@@ -14,6 +14,11 @@
  *              (todos na coluna do instante exato: a coluna t começa em t)
  *              ■ término (10ª ativação)  ✗ perda de prazo
  *   CPUs:      cor e id da tarefa que ocupou a CPU; · CPU desligada
+ *
+ * De onde vêm os dados: o simulador (sim.c) já guardou, para cada tick e
+ * cada tarefa, o que aconteceu (s->cel) e em qual CPU (s->cpu), além da
+ * lista de eventos (s->ev). Este arquivo só LÊ esses dados e desenha; ele
+ * não calcula nada da simulação.
  */
 #include "gantt.h"
 #include "util.h"
@@ -29,6 +34,12 @@
 #define COR_PRAZO      0xFF4040
 #define COR_EIXO       0x909090
 
+/* Transforma a lista de eventos numa "máscara" por célula: para cada
+ * (instante, tarefa) um número onde cada BIT diz que um tipo de evento
+ * ocorreu ali (M_CHEGADA = bit 1, M_FIM = bit 2, ...). Usar bits permite
+ * combinar eventos no mesmo instante (ex.: chegada + fim = ↕) com um OR.
+ * A máscara cobre os instantes [ini, fim) e é indexada por
+ * mask[(instante - ini) * n + tarefa]. */
 void gantt_mascaras(const Simulador *s, int ini, int fim, unsigned char *mask) {
     int n = s->atual.n;
     memset(mask, 0, (size_t)(fim - ini) * (size_t)(n ? n : 1));
@@ -47,19 +58,28 @@ void gantt_mascaras(const Simulador *s, int ini, int fim, unsigned char *mask) {
         case EV_TERMINO: *m |= M_TERMINO; break;
         case EV_PRAZO_PERDIDO: *m |= M_PRAZO; break;
         case EV_SORTEIO: *m |= M_SORTEIO; break;
-        default: break;
+        default: break;   /* preempção e fim de quantum não têm marcador */
         }
     }
 }
 
+/* qsort só passa dois elementos ao comparador, sem contexto extra. Como
+ * precisamos consultar o vetor de tarefas para ordenar pelos IDs, o
+ * apontamos por esta variável global (única exceção ao "sem globais"). */
 static const Estado *g_ordem_estado;
 
+/* Ordem DECRESCENTE de id: devolve negativo se `a` tem id MAIOR (vai antes).
+ * O truque (ia < ib) - (ia > ib) dá -1, 0 ou +1 sem usar subtração, que
+ * poderia estourar o int. */
 static int cmp_id_desc(const void *a, const void *b) {
     int ia = g_ordem_estado->tarefas[*(const int *)a].id;
     int ib = g_ordem_estado->tarefas[*(const int *)b].id;
     return (ia < ib) - (ia > ib);
 }
 
+/* Requisito 2.5: o menor ID fica mais perto do eixo X (embaixo). Como
+ * desenhamos de cima para baixo, o maior ID sai primeiro. Devolve os
+ * índices das tarefas já nessa ordem; quem chama libera o vetor. */
 int *gantt_ordem(const Estado *e) {
     int *o = xmalloc((size_t)(e->n ? e->n : 1) * sizeof(int));
     for (int i = 0; i < e->n; i++) o[i] = i;
@@ -68,6 +88,8 @@ int *gantt_ordem(const Estado *e) {
     return o;
 }
 
+/* Um caractere para a CPU: 0-9, depois A-Z (10 a 35), depois '#'. Cabe em
+ * 1 coluna (cada tick tem 1 coluna só). */
 static char digito_cpu(int c) {
     if (c < 0) return ' ';
     if (c < 10) return (char)('0' + c);
@@ -75,7 +97,8 @@ static char digito_cpu(int c) {
     return '#';
 }
 
-/* Largura do rótulo à esquerda ("T12", "CPU3"), igual para todas as linhas. */
+/* Largura do rótulo à esquerda ("T12", "CPU3"), igual para todas as linhas
+ * (para o gráfico ficar alinhado). Mínimo 5; cresce se algum id for grande. */
 static int largura_rotulo(const Estado *e) {
     int w = 5;
     char buf[32];
@@ -88,7 +111,10 @@ static int largura_rotulo(const Estado *e) {
     return w;
 }
 
-/* Quem estava em cada CPU em cada tick: ocup[(t-ini)*MAX_CPUS + c]. */
+/* Quem estava em cada CPU em cada tick: ocup[(t-ini)*MAX_CPUS + c].
+ * O rastro guarda "qual CPU usou a tarefa i"; para desenhar as linhas das
+ * CPUs precisamos do inverso, "qual tarefa usou a CPU c". Aqui invertemos.
+ * -1 = nenhuma (CPU desligada naquele tick). */
 static int *ocupacao(const Simulador *s, int ini, int fim) {
     int *oc = xmalloc((size_t)(fim - ini) * MAX_CPUS * sizeof(int));
     for (int t = ini; t < fim; t++) {
@@ -101,6 +127,11 @@ static int *ocupacao(const Simulador *s, int ini, int fim) {
     return oc;
 }
 
+/* Desenha o eixo do tempo: uma linha com ┴ a cada 5 ticks e, embaixo, os
+ * números (de 10 em 10, ou de 5 em 5 se a janela for curta). Escrevemos
+ * caractere por caractere porque um número de vários dígitos ocupa várias
+ * colunas: avançamos `t` pelo tamanho do número impresso (`t += l`) e
+ * `pos` impede que o próximo número encoste no anterior. */
 static void eixo(int lbl, int ini, int fim) {
     printf("%*s", lbl, "");
     term_fg(COR_EIXO);
@@ -127,10 +158,15 @@ static void eixo(int lbl, int ini, int fim) {
     putchar('\n');
 }
 
+/* Desenha o Gantt da janela de ticks [ini, fim). Estrutura:
+ *   para cada tarefa (de cima para baixo): linha de marcadores + barra;
+ *   eixo do tempo;
+ *   uma linha por CPU;
+ *   legenda. */
 void gantt_tui(const Simulador *s, int ini, int fim) {
     const Estado *e = &s->atual;
     int n = e->n;
-    if (fim > s->ncols) fim = s->ncols;
+    if (fim > s->ncols) fim = s->ncols;   /* não desenha o que não foi simulado */
     if (ini < 0) ini = 0;
     int lbl = largura_rotulo(e);
     if (fim <= ini) {
@@ -150,7 +186,9 @@ void gantt_tui(const Simulador *s, int ini, int fim) {
         int i = ordem[r];
         const TCB *k = &e->tarefas[i];
 
-        /* linha de marcadores */
+        /* linha de marcadores: um símbolo por coluna. A ordem do if/else
+         * dá a prioridade visual: perda de prazo > término > chegada+fim
+         * > fim > chegada. */
         printf("%*s ", lbl, "");
         for (int t = ini; t < fim_m; t++) {
             unsigned m = mask[(size_t)(t - ini) * n + i];
@@ -173,7 +211,7 @@ void gantt_tui(const Simulador *s, int ini, int fim) {
         }
         putchar('\n');
 
-        /* barra */
+        /* barra: rótulo colorido, '│' e uma célula por tick. */
         term_fg(k->cor);
         term_negrito();
         char rot[32];
@@ -187,6 +225,8 @@ void gantt_tui(const Simulador *s, int ini, int fim) {
             unsigned m = mask[(size_t)(t - ini) * n + i];
             switch (sim_celula(s, t, i)) {
             case G_EXEC:
+                /* fundo = cor da tarefa; texto = número da CPU (ou '?' se
+                 * a tarefa foi escolhida por sorteio neste tick). */
                 term_bg(k->cor);
                 term_fg(cor_contraste(k->cor));
                 putchar((m & M_SORTEIO) ? '?' : digito_cpu(sim_cpu_celula(s, t, i)));
@@ -211,7 +251,9 @@ void gantt_tui(const Simulador *s, int ini, int fim) {
     }
     eixo(lbl, ini, fim);
 
-    /* bloco das CPUs */
+    /* bloco das CPUs: uma linha por CPU mostrando QUEM a ocupou em cada
+     * tick. Trechos contínuos da mesma tarefa viram um bloco colorido com o
+     * id escrito dentro (em vez de repetir o id em cada coluna). */
     int ncpu_max = e->ncpus;
     for (int t = ini; t < fim; t++)
         if (s->ncpus_col[t] > ncpu_max) ncpu_max = s->ncpus_col[t];
@@ -233,6 +275,7 @@ void gantt_tui(const Simulador *s, int ini, int fim) {
                 continue;
             }
             if (i < 0) {
+                /* Ninguém usou: CPU desligada (req. 1.2). */
                 term_fg(COR_DESLIGADA);
                 fputs("·", stdout);
                 term_reset();
@@ -275,6 +318,9 @@ void gantt_tui(const Simulador *s, int ini, int fim) {
     printf(" perda de prazo\n");
 }
 
+/* Gantt de toda a simulação: quebra em "faixas" da largura do terminal
+ * (uma simulação de 3000 ticks não cabe numa linha). O -3 reserva espaço
+ * para o rótulo e a margem. */
 void gantt_tui_completo(const Simulador *s) {
     int lbl = largura_rotulo(&s->atual);
     int w = term_largura() - lbl - 3;
@@ -290,6 +336,11 @@ void gantt_tui_completo(const Simulador *s) {
     }
 }
 
+/* Versão em texto puro (opção --texto): lista "CPU0: [0,20)T1 [20,60)T2..."
+ * agrupando ticks seguidos da mesma tarefa em intervalos [início, fim).
+ * Serve para conferir o resultado à mão e nos testes automáticos, que
+ * comparam este texto com o esperado. Os eventos pouco interessantes
+ * (preempção, quantum, chegada, fim) ficam de fora para não poluir. */
 void gantt_texto(const Simulador *s) {
     const Estado *e = &s->atual;
     printf("Linha do tempo por CPU ([início, fim) e tarefa):\n");

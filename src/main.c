@@ -43,18 +43,32 @@ static void uso(const char *prog) {
            "  ...\n", prog);
 }
 
+/*
+ * Roteiro do programa, em 4 etapas:
+ *   1. lê as opções da linha de comando (argv);
+ *   2. obtém uma configuração válida (do arquivo informado, ou perguntando);
+ *   3. descobre o modo: passo a passo (a) ou completo (b);
+ *   4. entrega para a interface (ui.c), que roda a simulação e libera tudo.
+ *
+ * Códigos de saída: 0 = ok; 1 = erro no arquivo/sem tarefas; 2 = uso errado
+ * da linha de comando. Os scripts de teste dependem disso.
+ */
 int main(int argc, char **argv) {
-    const char *arquivo = NULL;
-    const char *modo = NULL;
-    bool validar = false;
+    const char *arquivo = NULL;   /* caminho do arquivo de configuração       */
+    const char *modo = NULL;      /* "passo"/"a" ou "completo"/"b"            */
+    bool validar = false;         /* --validar: só confere o arquivo e sai    */
+    /* OpcoesUI = {arquivo do SVG, mostrar texto no modo completo, semente} */
     OpcoesUI op = {NULL, false, 1};
 
 #ifndef _WIN32
-    /* Cores só quando a saída é um terminal de verdade. */
+    /* Cores só quando a saída é um terminal de verdade (isatty). Se a saída
+     * for redirecionada para um arquivo, os códigos de cor sujariam o texto. */
     if (!isatty(STDOUT_FILENO)) g_usar_cores = false;
 #endif
-    if (getenv("NO_COLOR")) g_usar_cores = false;
+    if (getenv("NO_COLOR")) g_usar_cores = false;   /* convenção no-color.org */
 
+    /* Etapa 1: percorre argv. Opções que recebem valor usam `++i` para
+     * consumir o argumento seguinte; `tem_valor` evita ler além do fim. */
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
         bool tem_valor = i + 1 < argc;
@@ -101,6 +115,9 @@ int main(int argc, char **argv) {
         }
     }
 
+    /* Etapa 2: obter a configuração. Começa com os valores padrão (req. 3.2);
+     * o que vier do arquivo sobrescreve. Lemos para `lido` (e não direto em
+     * `cfg`) para que um arquivo ruim não estrague a configuração padrão. */
     Config cfg;
     config_padrao(&cfg);
     if (arquivo) {
@@ -131,6 +148,9 @@ int main(int argc, char **argv) {
         return 0;
     }
 
+    /* Etapas 3 e 4: `m` vale 'a' (passo a passo) ou 'b' (completo). Com
+     * --modo não há perguntas; sem ele mostramos o menu de configuração
+     * (onde dá para editar tudo) e depois perguntamos o modo. */
     int ret = 0;
     char m;
     if (modo) {

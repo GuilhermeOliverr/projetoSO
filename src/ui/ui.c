@@ -5,6 +5,16 @@
  * como num debugger (gdb): é fácil de usar, não precisa de biblioteca de
  * interface e funciona igual em Linux, WSL e MSYS2. Toda entrada inválida é
  * recusada com o motivo, e Enter sem nada mantém o valor sugerido.
+ *
+ * Mapa do arquivo (na ordem em que aparece):
+ *   1. utilitários de mensagem e de leitura (pedir_int, pedir_cor, validadores);
+ *   2. tela de configuração (antes da simulação): ui_menu_config;
+ *   3. estatísticas e exportação do SVG;
+ *   4. modo completo: ui_execucao_completa;
+ *   5. modo passo a passo: detalhes_tarefa, estado_sistema, editar_tarefa,
+ *      adicionar_tarefa e o laço principal ui_passo_a_passo.
+ * A interface NÃO calcula a simulação: ela só chama sim_* (sim.c) e desenha
+ * com gantt_* (gantt_*.c).
  */
 #include "ui.h"
 #include "gantt.h"
@@ -44,10 +54,17 @@ static void fmsg(char *dst, size_t tam, const char *fmt, ...) {
 
 /* ------------------------------------------------------- leitura de dados */
 
+/* Um Validador é uma função que recebe o valor digitado e devolve NULL se
+ * está ok, ou o texto do motivo da recusa (req. 3.1/3.4: "informar
+ * claramente por que não pode"). `ctx` leva informação extra quando a regra
+ * precisa (ex.: a lista de ids já usados). Passar a regra como função
+ * permite reaproveitar pedir_int para todos os campos. */
 typedef const char *(*Validador)(int v, const void *ctx);
 
 /* Pede um inteiro mostrando o valor sugerido entre colchetes. Enter mantém
- * o sugerido. Repete até receber um valor válido. false = EOF. */
+ * o sugerido. Repete até receber um valor válido. false = EOF.
+ * Ordem das checagens: (1) é número? (2) cabe num int? (3) o validador
+ * aceita? Em qualquer falha mostra o motivo e pergunta de novo. */
 static bool pedir_int(const char *rotulo, int sugerido, int *out, Validador val, const void *ctx) {
     char buf[128], prompt[256];
     snprintf(prompt, sizeof prompt, "  %s [%d]: ", rotulo, sugerido);
@@ -97,7 +114,10 @@ static const char *val_min(int v, const void *ctx) {
 }
 
 static const char *val_quantum(int v, const void *ctx) { (void)ctx; return config_validar_quantum(v); }
-/* Rótulo do prompt de CPUs com o limite N à vista (steering, ambig. 6). */
+/* Rótulo do prompt de CPUs com o limite N à vista (steering, ambig. 6).
+ * STR_/STR é o truque clássico do pré-processador para transformar o número
+ * MAX_CPUS (64) em texto "64" em tempo de compilação; o nível duplo é
+ * necessário para a macro ser expandida ANTES de virar texto. */
 #define STR_(x) #x
 #define STR(x) STR_(x)
 #define ROTULO_CPUS "quantidade de CPUs (1 a " STR(MAX_CPUS) ")"
@@ -139,7 +159,8 @@ static int pedir_algoritmo(int atual) {
 }
 
 /* Lê os dados de uma tarefa nova (ou editada, se `t` já vier preenchida).
- * `min_ingresso` impede chegar no passado durante a simulação. */
+ * `min_ingresso` impede chegar no passado durante a simulação. Cada campo
+ * usa o valor atual de `t` como sugestão (req. 3.2: valores padrão). */
 static bool pedir_tarefa(TarefaCfg *t, const CtxIds *ids, int min_ingresso, char *eventos, size_t tam_ev) {
     if (!pedir_int("id", t->id, &t->id, val_id, ids)) return false;
     if (!pedir_cor(t->cor, &t->cor)) return false;
@@ -161,6 +182,11 @@ static bool pedir_tarefa(TarefaCfg *t, const CtxIds *ids, int min_ingresso, char
 
 /* ------------------------------------------------------- configuração */
 
+/* Mostra U = soma(C/P) e o que ela significa para o algoritmo escolhido:
+ *   RM:  compara com o limite n(2^(1/n)-1) (teste suficiente: abaixo dele
+ *        garante escalonar, acima fica "inconclusivo");
+ *   EDF: com prazo = período, escalona em 1 CPU se e somente se U <= 1.
+ * É só uma informação para o usuário; não afeta a simulação. */
 static void imprimir_utilizacao(int n, double u, int alg) {
     printf("Utilização U = Σ C/P = %.3f", u);
     const Escalonador *e = sched_obter(alg);
@@ -248,6 +274,10 @@ bool ui_pedir_arquivo(Config *cfg) {
     }
 }
 
+/* Menu de configuração: repete até o usuário apertar Enter (iniciar) ou
+ * sair. Cada comando é UMA letra, às vezes seguida de um número (id). O
+ * switch no meio trata cada letra; todas as alterações validam o valor e
+ * recusam com o motivo (req. 3.1). */
 bool ui_menu_config(Config *cfg) {
     char buf[256];
     for (;;) {
@@ -259,11 +289,13 @@ bool ui_menu_config(Config *cfg) {
         printf("\n[Enter] iniciar  [a] algoritmo  [k] quantum  [c] CPUs  [e id] editar tarefa\n"
                "[n] nova tarefa  [r id] remover tarefa  [l] carregar outro arquivo  [q] sair\n");
         if (!ler_linha("> ", buf, sizeof buf)) return false;
+        /* cmd = 1ª letra; arg = número depois dela, se houver ("e 2" ->
+         * cmd 'e', arg 2). O str_trim tira o espaço entre eles. */
         char cmd = buf[0];
         int arg = 0;
         bool tem_arg = parse_int(str_trim(buf + (cmd ? 1 : 0)), &arg) == 0;
         switch (cmd) {
-        case '\0':
+        case '\0':   /* Enter sem nada = iniciar (se houver tarefas) */
             if (cfg->n == 0) { ui_erro("não há tarefas periódicas para simular; use [n] ou [l]"); break; }
             return true;
         case 'a': {
@@ -278,6 +310,8 @@ bool ui_menu_config(Config *cfg) {
             int i = indice_cfg(cfg, arg);
             if (i < 0) { ui_erro("não existe tarefa com id %d", arg); break; }
             if (cmd == 'r') {
+                /* Remover do meio de um vetor: libera a memória da tarefa e
+                 * desloca as seguintes uma posição para trás (memmove). */
                 config_liberar_tarefa(&cfg->tarefas[i]);
                 memmove(&cfg->tarefas[i], &cfg->tarefas[i + 1], (size_t)(cfg->n - i - 1) * sizeof(TarefaCfg));
                 cfg->n--;
@@ -334,6 +368,9 @@ char ui_pedir_modo(void) {
 
 /* -------------------------------------------------------- utilidades sim */
 
+/* Nome do SVG de saída: o informado em --saida, ou "<nome do arquivo de
+ * configuração sem pasta e sem extensão>_gantt.svg" (ex.: fig2_5_rm.txt ->
+ * fig2_5_rm_gantt.svg). Aceita '/' e '\' como separadores (Linux e Windows). */
 static void caminho_svg_padrao(const Config *cfg, const OpcoesUI *op, char *dst, size_t tam) {
     if (op->saida_svg) { snprintf(dst, tam, "%s", op->saida_svg); return; }
     /* nome do arquivo de configuração, sem diretório nem extensão */
@@ -352,6 +389,9 @@ static void titulo_svg(const Config *cfg, char *dst, size_t tam) {
     snprintf(dst, tam, "%s", cfg->caminho ? cfg->caminho : "simulação");
 }
 
+/* Tabela final: por tarefa (ativações, prazos perdidos, tempos, preempções)
+ * e por CPU (quanto ficou ocupada x desligada, req. 1.2). "Tempo de resposta"
+ * = instante em que a ativação terminou - instante em que chegou. */
 static void estatisticas(const Simulador *s) {
     const Estado *e = &s->atual;
     term_negrito();
@@ -409,6 +449,9 @@ static bool exportar(const Simulador *s, const Config *cfg, const char *caminho,
 
 /* ------------------------------------------------------- modo completo */
 
+/* Modo (b): simula tudo de uma vez, SEM histórico (historico = false, não
+ * dá para voltar) e mostra só o resultado final: Gantt, estatísticas e o
+ * SVG. Devolve o código de saída do programa. */
 int ui_execucao_completa(const Config *cfg, const OpcoesUI *op) {
     if (cfg->n == 0) {
         ui_erro("não há tarefas periódicas para simular");
@@ -438,6 +481,8 @@ int ui_execucao_completa(const Config *cfg, const OpcoesUI *op) {
 
 /* ---------------------------------------------------- modo passo a passo */
 
+/* Comando `t id`: despeja o TCB de uma tarefa (req. 1.5.1: examinar o
+ * estado de cada tarefa individualmente, como num debugger). */
 static void detalhes_tarefa(const Simulador *s, int i) {
     const TCB *k = &s->atual.tarefas[i];
     term_negrito();
@@ -470,6 +515,7 @@ static void detalhes_tarefa(const Simulador *s, int i) {
     if (k->termino >= 0) printf("  terminou no instante %d\n", k->termino);
 }
 
+/* Comando `s`: visão geral do sistema (todas as tarefas numa tabela). */
 static void estado_sistema(const Simulador *s) {
     const Estado *e = &s->atual;
     const Escalonador *esc = sched_obter(e->alg);
@@ -539,9 +585,17 @@ static void ajuda_passo(void) {
            "Editar num instante passado descarta o que já tinha sido simulado depois dele.\n");
 }
 
-/* Edita uma tarefa durante a simulação. Toda mudança passa por
+/* Edita uma tarefa durante a simulação (req. 3.4). Toda mudança passa por
  * sim_preparar_edicao/sim_concluir_edicao, que descartam o futuro e gravam o
- * novo estado no histórico. */
+ * novo estado no histórico.
+ *
+ * Padrão de CADA opção do switch (importante para entender o código):
+ *   1. pede o valor e VALIDA (se inválido, sai com `return` ANTES de
+ *      sim_preparar_edicao: assim uma edição recusada não destrói o futuro);
+ *   2. sim_preparar_edicao(s): descarta o futuro;
+ *   3. altera o TCB;
+ *   4. escreve a mensagem de confirmação em `msg`.
+ * No fim do switch, sim_concluir_edicao grava o novo estado. */
 static void editar_tarefa(Simulador *s, int i, char *msg, size_t tam) {
     Estado *e = &s->atual;
     TCB *k = &e->tarefas[i];
@@ -661,6 +715,10 @@ static void editar_tarefa(Simulador *s, int i, char *msg, size_t tam) {
     sim_concluir_edicao(s);
 }
 
+/* Comando `+`: acrescenta uma tarefa com a simulação em andamento. O TCB
+ * aponta para a lista de eventos da TarefaCfg, que precisa continuar
+ * existindo; por isso a guardamos em `extras` (vive até o fim). O ingresso
+ * mínimo é o instante atual: não se cria tarefa no passado. */
 static void adicionar_tarefa(Simulador *s, Config *extras, char *msg, size_t tam) {
     Estado *e = &s->atual;
     int *ids = xmalloc((size_t)(e->n + 1) * sizeof(int));
@@ -685,6 +743,13 @@ static void adicionar_tarefa(Simulador *s, Config *extras, char *msg, size_t tam
     fmsg(msg, tam, "Tarefa %d adicionada; chega no instante %d.", t.id, t.ingresso);
 }
 
+/* Modo (a): o "debugger" do sistema. Laço principal, a cada volta:
+ *   1. se chegou ao fim, exporta o SVG automaticamente (req. 2.4);
+ *   2. redesenha a tela: cabeçalho, Gantt atualizado (req. 2.3), resumo do
+ *      último tick e a mensagem do último comando;
+ *   3. lê um comando e executa (switch no final).
+ * `msg` leva o resultado do comando anterior para a próxima tela; se
+ * começa com "erro" aparece em vermelho, senão em verde. */
 void ui_passo_a_passo(const Config *cfg, const OpcoesUI *op) {
     Simulador s;
     sim_iniciar(&s, cfg, true, op->semente);
@@ -727,7 +792,9 @@ void ui_passo_a_passo(const Config *cfg, const OpcoesUI *op) {
         }
         printf("Gantt: ticks %d a %d%s\n", ini, fim - 1, janela_ini >= 0 ? " (janela fixa: 'v' volta a seguir)" : "");
         /* gantt_tui só desenha colunas já simuladas e anteriores ao instante
-         * atual: ao retroceder, o "futuro" gravado não aparece. */
+         * atual: ao retroceder, o "futuro" gravado não aparece. `vis` é uma
+         * CÓPIA rasa do simulador (só os números mudam: ncols e nev), usada
+         * apenas para desenhar, então não alteramos o rastro real. */
         Simulador vis = s;
         vis.ncols = s.atual.t < s.ncols ? s.atual.t : s.ncols;
         int nev = 0;
@@ -748,6 +815,10 @@ void ui_passo_a_passo(const Config *cfg, const OpcoesUI *op) {
         }
         if (!ler_linha("[Enter] avança, h ajuda > ", buf, sizeof buf)) break;
 
+        /* Interpretação do comando: cmd = 1ª letra, resto = o que vem
+         * depois, arg = resto como número (se for). strchr checa se a letra
+         * é um comando conhecido; o comando `x` é o único cujo argumento é
+         * texto (nome do arquivo), por isso não exige número. */
         char cmd = buf[0];
         char *resto = str_trim(buf + (cmd ? 1 : 0));
         int arg = 0;
@@ -777,6 +848,8 @@ void ui_passo_a_passo(const Config *cfg, const OpcoesUI *op) {
             int k = tem_arg ? arg : 1;
             if (k < 1) { fmsg(msg, sizeof msg, "erro: a quantidade de ticks deve ser >= 1"); break; }
             if (s.atual.t == 0) { fmsg(msg, sizeof msg, "erro: já está no instante 0"); break; }
+            /* Voltar não recalcula nada: sim_voltar só recarrega o snapshot
+             * do tick anterior (o relógio recua junto, req. 1.5.2). */
             for (int j = 0; j < k && sim_voltar(&s); j++) {}
             break;
         }
@@ -854,7 +927,7 @@ void ui_passo_a_passo(const Config *cfg, const OpcoesUI *op) {
             break;
         }
         case 'h': term_limpar(); ajuda_passo(); pausar(); break;
-        case 'q': goto sair;
+        case 'q': goto sair;   /* sai dos DOIS laços de uma vez (for + switch) */
         default: fmsg(msg, sizeof msg, "erro: comando '%c' desconhecido (h mostra a ajuda)", cmd);
         }
     }
