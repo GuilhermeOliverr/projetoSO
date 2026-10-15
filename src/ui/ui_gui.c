@@ -1717,6 +1717,9 @@ static bool acao_simulacao(Sessao *z, int a) {
     }
     case S_EDITAR: {
         int i = z->v.sel;
+        /* A tarefa escolhida pode não existir neste instante: foi adicionada
+         * depois e o usuário voltou no tempo (a foto tem menos tarefas). */
+        if (i >= s->atual.n) i = z->v.sel = -1;
         if (i < 0) {
             int id;
             if (!pedir_numero("Editar tarefa", "Dica: clicar numa tarefa no gráfico já a escolhe.", "id da tarefa",
@@ -1821,6 +1824,9 @@ static void desenhar_simulacao(Sessao *z) {
     Simulador *s = &z->s;
     Simulador vis = visivel(z);
     const Escalonador *esc = sched_obter(s->atual.alg);
+    /* Ao voltar para antes de uma tarefa adicionada, ela some do estado:
+     * a seleção deixa de valer (ver S_EDITAR). */
+    if (z->v.sel >= s->atual.n) z->v.sel = -1;
     novo_quadro();
     char sub[512];
     snprintf(sub, sizeof sub, "%s | %s | %d CPU(s) | quantum %d | instante t = %d%s",
