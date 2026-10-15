@@ -10,7 +10,61 @@ instalar nada além do compilador.
 ## Requisitos
 
 - `gcc` (compilador C com suporte a C11)
-- `make`
+- `make`(Não é 100% obrigatório, mas é importante ter para que possa compilar facilmente, leia mais logo abaixo)
+
+### Compilando com o `make`
+
+O `make` é uma ferramenta que automatiza a compilação. Ele lê o arquivo
+`Makefile` da pasta do projeto, que guarda os comandos do `gcc` com todas as
+opções e a lista de arquivos, e executa tudo com uma palavra só. Sem ele você
+teria de digitar o comando inteiro do `gcc` a cada compilação. Os alvos do
+projeto são:
+
+| Comando | O que faz |
+|---------|-----------|
+| `make` | compila o simulador e gera o executável `projetoSO` |
+| `make plugins` | compila o escalonador de exemplo (`plugins/exemplo_fifo.so`) |
+| `make test` | compila o que faltar e roda a bateria de testes |
+| `make clean` | apaga o executável, os plugins e os SVGs gerados |
+
+Para saber se já está instalado, rode `make --version`. Se não estiver:
+
+- **Ubuntu/Debian e WSL**: `sudo apt install build-essential` (instala o
+  `make` junto com o `gcc`; é o mesmo comando da seção Instalação).
+- **macOS**: `xcode-select --install` (traz `make` e compilador).
+- **Windows com MSYS2**: `pacman -S make`, no terminal *MSYS2 UCRT64*.
+- **Fedora**: `sudo dnf install make gcc`.
+
+Com ele instalado, basta entrar na pasta do projeto e rodar `make`.
+
+### Compilando sem o `make`
+
+Se não quiser instalar o `make`, ele não é obrigatório: só chama o compilador. Se ele não estiver instalado, rode o `gcc`
+direto, na pasta do projeto:
+
+```bash
+# Linux ou WSL
+gcc -std=c11 -O2 -Iinclude -o projetoSO src/*.c src/*/*.c -ldl
+
+# macOS
+gcc -std=c11 -O2 -Iinclude -o projetoSO src/*.c src/*/*.c -ldl \
+    -framework Cocoa -framework CoreGraphics -lobjc
+```
+
+```powershell
+# Windows (MSYS2); sem -ldl, os plugins ficam desativados
+gcc -std=c11 -O2 -Iinclude -o projetoSO.exe src/*.c src/*/*.c -lgdi32
+```
+
+Depois é só executar `./projetoSO exemplos/fig2_5_rm.txt` (no Windows,
+`.\projetoSO.exe exemplos\fig2_5_rm.txt`). O plugin de exemplo, sem o `make`:
+
+```bash
+gcc -std=c11 -O2 -Iinclude -fPIC -shared -o plugins/exemplo_fifo.so plugins/exemplo_fifo.c
+```
+
+E os testes: `sh tests/run_tests.sh` (precisa do executável e do plugin já
+compilados).
 
 ## Instalação
 
@@ -70,7 +124,9 @@ make                                   # compila e gera o executável projetoSO
 ./projetoSO                            # abre a janela e pede o arquivo
 ./projetoSO exemplos/fig2_5_rm.txt     # abre a janela já com o arquivo
 ./projetoSO --terminal                 # mesma interface, no terminal
-make test                              # roda a bateria de testes
+make plugins                           # compila o escalonador de exemplo (.so)
+./projetoSO exemplos/fig2_5_rm.txt --plugin plugins/exemplo_fifo.so
+make test                              # roda a bateria de testes (compila os plugins antes)
 make clean                             # remove executável, plugins e SVGs gerados
 ```
 
@@ -120,6 +176,7 @@ make
   --plugin LIB.so        carrega um escalonador de uma biblioteca dinâmica
   --sem-cor              desliga as cores ANSI
   --terminal             usa a interface de texto em vez da janela gráfica
+  -h, --help             mostra a ajuda
 ```
 
 Sem `--modo`, o programa abre uma **janela gráfica**:
@@ -234,7 +291,7 @@ RM;2;1
   linhas em branco, `\r\n` do Windows e BOM UTF-8 são aceitos; cor com ou sem `#`.
 - Campo vazio usa o valor padrão (com aviso). `prazo` vazio ou ausente = período.
 - `periodo = 0` (aperiódica) é ignorada com aviso; `periodo < 0` é erro.
-- `lista_eventos` é guardada sem interpretação para o Projeto B: o texto cru e a
+- `lista_eventos` é guardada sem interpretação: o texto cru e a
   lista separada por `,` ou `;` (sem limite de eventos por tarefa; nunca gera erro).
   Ao carregar, um aviso informa quantos eventos cada tarefa tem.
 - Erros dizem arquivo, linha, campo e motivo, por exemplo:
@@ -264,14 +321,14 @@ Mais exemplos em `exemplos/` e `tests/validos/`.
   nova fica acumulada e começa assim que a anterior termina.
 - **Perda de prazo**: marcada uma vez por ativação; a tarefa continua até
   completar a duração.
-- **Suspensa**: no Projeto A não há eventos de suspensão; o estado aparece
+- **Suspensa**: não há eventos de suspensão; o estado aparece
   quando o usuário suspende uma tarefa no modo passo a passo.
 - **Histórico**: um snapshot completo por tick (simples e garantidamente
   correto). O modo completo não guarda snapshots.
 - **Prioridade nominal × ativa**: o algoritmo só informa a prioridade nominal
   (um número, menor = mais prioritária: período no RM, deadline absoluto no
-  EDF); o escalonador compara a prioridade ativa, que no Projeto A é igual à
-  nominal e no Projeto B receberá a herança de prioridade.
+  EDF); o escalonador compara a prioridade ativa, que hoje é igual à
+  nominal (ficam separadas para a ativa poder mudar sem alterar a nominal).
 - **Marcadores no Gantt**: cada evento fica na coluna do seu instante exato (a
   coluna t começa no instante t), no terminal e no SVG.
 - **Escalonador plugável**: um algoritmo é uma função que devolve a prioridade
@@ -321,7 +378,7 @@ projetoSO/
 ├── include/                # cabeçalhos (config.h, task.h, sim.h, sched.h, gantt.h, ui.h, util.h, edicao.h, gfx.h, tela.h)
 ├── plugins/                # escalonador de exemplo carregado com dlopen
 ├── exemplos/               # figuras 2.5 e 2.6 do capítulo, várias CPUs, quantum
-├── tests/                  # arquivos válidos/inválidos e run_tests.sh
+├── tests/                  # configs válidas/inválidas e run_tests.sh (make test)
 ├── docs/                   # enunciado do trabalho (PDF)
 ├── Makefile
 └── README.md

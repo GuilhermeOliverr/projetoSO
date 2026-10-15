@@ -26,8 +26,7 @@ typedef enum {
 
 /* Por que uma tarefa está SUSPENSA. O Maziero inclui em "suspensa" tanto a
  * espera por um recurso quanto a espera pelo tempo passar (sleep); aqui o
- * motivo decide como a tarefa sai da suspensão e como aparece no Gantt.
- * O Projeto B vai acrescentar motivos como mutex e E/S. */
+ * motivo decide como a tarefa sai da suspensão e como aparece no Gantt. */
 typedef enum {
     SUSP_NENHUM,   /* a tarefa não está suspensa                                */
     SUSP_PERIODO,  /* ativação concluída, esperando o próximo período: volta
@@ -49,7 +48,7 @@ typedef struct {
     const char *eventos_raw;   /* lista de eventos como veio do arquivo          */
     const char *const *eventos;/* a mesma lista já separada, um item por evento.
                                   Vetor dinâmico (sem limite de eventos por
-                                  tarefa) que o Projeto B vai interpretar.      */
+                                  tarefa), guardado sem interpretação.          */
     int neventos;
 
     /* ---- estado dinâmico ---- */
@@ -74,9 +73,9 @@ typedef struct {
     /* ---- prioridade (menor valor = mais prioritária) ----
      * nominal: a que o algoritmo dá à tarefa (RM: período; EDF: deadline
      *          absoluto), recalculada a cada tick por sched_atualizar;
-     * ativa:   a que o escalonador realmente compara. No Projeto A é igual
-     *          à nominal; no Projeto B a herança de prioridade (PIP/PCP)
-     *          vai elevá-la temporariamente sem tocar na nominal. */
+     * ativa:   a que o escalonador realmente compara (hoje é igual à
+     *          nominal, mas ficam separadas para que a ativa possa mudar
+     *          sem tocar na nominal). */
     int prio_nominal;
     int prio_ativa;
 
@@ -91,7 +90,7 @@ const char *estado_nome(EstadoTarefa e);
 /* Estado com o motivo, quando suspensa ("suspensa: próximo período"). */
 const char *estado_descricao(const TCB *k);
 /* Suspensa pelo usuário: a única suspensão que impede a tarefa de progredir
- * sozinha no Projeto A. */
+ * sozinha. */
 bool suspensa_pelo_usuario(const TCB *k);
 
 #endif

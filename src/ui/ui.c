@@ -156,7 +156,7 @@ static bool pedir_tarefa(TarefaCfg *t, const CtxIds *ids, int min_ingresso, char
     int sug = t->prazo == periodo_antigo ? t->periodo : t->prazo;
     if (!pedir_int("prazo", sug, &t->prazo, val_positivo, NULL)) return false;
     char prompt[600];
-    snprintf(prompt, sizeof prompt, "  lista de eventos (Projeto B) [%s]: ", t->eventos ? t->eventos : "");
+    snprintf(prompt, sizeof prompt, "  lista de eventos [%s]: ", t->eventos ? t->eventos : "");
     char buf[512];
     if (!ler_linha(prompt, buf, sizeof buf)) return false;
     snprintf(eventos, tam_ev, "%s", *buf ? buf : (t->eventos ? t->eventos : ""));
@@ -475,7 +475,7 @@ static void detalhes_tarefa(const Simulador *s, int i) {
     term_reset();
     printf("  parâmetros: cor %06X | ingresso %d | duração %d | período %d | prazo %d\n",
            k->cor, k->ingresso, k->duracao, k->periodo, k->prazo);
-    printf("  eventos (Projeto B): %d", k->neventos);
+    printf("  eventos: %d", k->neventos);
     for (int j = 0; j < k->neventos; j++) printf("%s%s", j ? " | " : ": ", k->eventos[j]);
     putchar('\n');
     printf("  estado: %s\n", estado_descricao(k));
