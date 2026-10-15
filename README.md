@@ -322,7 +322,7 @@ projetoSO/
 ├── plugins/                # escalonador de exemplo carregado com dlopen
 ├── exemplos/               # figuras 2.5 e 2.6 do capítulo, várias CPUs, quantum
 ├── tests/                  # arquivos válidos/inválidos e run_tests.sh
-├── docs/                   # plano do projeto, enunciado e capítulo de referência
+├── docs/                   # enunciado do trabalho (PDF)
 ├── Makefile
 └── README.md
 ```
