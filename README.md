@@ -3,7 +3,9 @@
 Simulador de um sistema operacional multitarefa preemptivo com escalonadores de
 tempo real **Rate Monotonic (RM)** e **Earliest Deadline First (EDF)**, de 1 a N
 CPUs, desenvolvido em C11 para a disciplina de Sistemas Operacionais (Projeto A).
-Só usa a biblioteca padrão do C: não precisa instalar nada além do compilador.
+Tem interface gráfica em janela no Linux/WSL, no Windows e no macOS, feita só
+com a biblioteca padrão do C e com o que já vem em cada sistema: não precisa
+instalar nada além do compilador.
 
 ## Requisitos
 
@@ -65,11 +67,16 @@ cd projetoSO
 
 ```bash
 make                                   # compila e gera o executável projetoSO
-./projetoSO                            # pergunta o arquivo e o modo
-./projetoSO exemplos/fig2_5_rm.txt     # já carrega o arquivo
+./projetoSO                            # abre a janela e pede o arquivo
+./projetoSO exemplos/fig2_5_rm.txt     # abre a janela já com o arquivo
+./projetoSO --terminal                 # mesma interface, no terminal
 make test                              # roda a bateria de testes
 make clean                             # remove executável, plugins e SVGs gerados
 ```
+
+No WSL do Windows 11 a janela aparece normalmente, porque o WSLg já vem com o
+servidor gráfico. Sem servidor gráfico (ex.: WSL do Windows 10, SSH), o
+programa avisa e usa o terminal sozinho.
 
 ### Windows, pelo PowerShell (usando o WSL)
 
@@ -87,7 +94,18 @@ make
 .\projetoSO.exe exemplos\fig2_5_rm.txt
 ```
 
-(No MSYS2 os plugins `.so` ficam desativados; o resto funciona igual.)
+A janela usa a API Win32, que faz parte do Windows. (No MSYS2 os plugins
+`.so` ficam desativados; o resto funciona igual.)
+
+### macOS
+
+Só é preciso o compilador do sistema (`xcode-select --install`, se ainda não
+tiver). A janela usa o Cocoa, que já vem no macOS.
+
+```bash
+make
+./projetoSO exemplos/fig2_5_rm.txt
+```
 
 ## Como usar
 
@@ -101,9 +119,46 @@ make
   --semente N            semente do sorteio de desempate (padrão 1; 0 = relógio)
   --plugin LIB.so        carrega um escalonador de uma biblioteca dinâmica
   --sem-cor              desliga as cores ANSI
+  --terminal             usa a interface de texto em vez da janela gráfica
 ```
 
-Fluxo sem `--modo`:
+Sem `--modo`, o programa abre uma **janela gráfica**:
+
+1. **Abrir arquivo**: digite o caminho (qualquer nome, qualquer pasta ou disco)
+   ou clique num arquivo da lista (clique de novo, ou Enter, para carregar).
+   Atalhos: **Pendrives e discos** (Linux: `/media/<usuário>`; Windows: lista
+   de unidades C:, D:, E:...; macOS: `/Volumes`), **Pasta pessoal**, **Pasta do
+   programa** e **Pasta acima**.
+   Se o arquivo tiver erros, todos aparecem com linha, campo e motivo.
+2. **Configuração**: mostra sistema e tarefas com os valores atuais; botões
+   para trocar algoritmo, quantum e CPUs, editar/adicionar/remover tarefas ou
+   abrir outro arquivo. Os formulários já vêm com os valores sugeridos e
+   recusam valores inválidos dizendo o motivo.
+3. **Passo a passo** ou **Execução completa**: Gantt na janela (com legenda,
+   rolagem e zoom), painel do tick (CPUs, fila e eventos) e painel da tarefa
+   escolhida (TCB) ou do sistema. Botões e atalhos: Avançar (→, Enter),
+   Voltar (←), Início (Home), Até o fim (End), Ir para (g), Editar tarefa (e),
+   \+ Tarefa (+), Algoritmo (a), Quantum (k), CPUs (c), Exportar SVG (x),
+   Estatísticas (s), Ajuda (h). Clique numa tarefa do gráfico para escolhê-la
+   e numa coluna para ver aquele tick.
+
+### Interface de terminal
+
+A interface de texto continua completa e faz o mesmo que a janela:
+
+```bash
+./projetoSO --terminal                          # pede o caminho do arquivo
+./projetoSO exemplos/fig2_5_rm.txt --terminal   # já carrega o arquivo
+./projetoSO exemplos/fig2_5_rm.txt --modo passo     # direto no passo a passo
+./projetoSO exemplos/fig2_5_rm.txt --modo completo  # roda tudo e mostra o resultado
+```
+
+Ela é usada quando se passa `--terminal`, `--modo` ou `--validar`, quando a
+entrada vem de um script (não de um teclado) e quando não há servidor gráfico
+(SSH, WSL do Windows 10, Linux sem área de trabalho). Nesse último caso o
+programa avisa o motivo antes.
+
+Fluxo:
 
 1. informe o caminho do arquivo (qualquer nome, qualquer pasta ou disco);
 2. a tela de configuração mostra sistema e tarefas com os valores atuais e
@@ -111,11 +166,23 @@ Fluxo sem `--modo`:
    carregar outro arquivo (Enter aceita o valor sugerido entre colchetes);
 3. escolha o modo: **(a) passo a passo** ou **(b) execução completa**.
 
+Comandos da tela de configuração:
+
+| Comando | Ação |
+|---------|------|
+| `Enter` | iniciar (depois pergunta o modo: `a` passo a passo, `b` completa) |
+| `a` / `k` / `c` | troca algoritmo / quantum / quantidade de CPUs |
+| `e id` / `r id` | edita / remove a tarefa |
+| `n` | nova tarefa |
+| `l` | carrega outro arquivo |
+| `q` | sair |
+
 Ao final da simulação o Gantt completo é salvo em **SVG** (abre em qualquer
 navegador) — no modo passo a passo isso acontece automaticamente quando o
-relógio chega ao fim, e o comando `x` exporta a qualquer momento.
+relógio chega ao fim, e o comando `x` (ou o botão "Exportar SVG") exporta a
+qualquer momento.
 
-### Comandos do modo passo a passo
+### Comandos do modo passo a passo no terminal
 
 | Comando | Ação |
 |---------|------|
@@ -169,6 +236,7 @@ RM;2;1
 - `periodo = 0` (aperiódica) é ignorada com aviso; `periodo < 0` é erro.
 - `lista_eventos` é guardada sem interpretação para o Projeto B: o texto cru e a
   lista separada por `,` ou `;` (sem limite de eventos por tarefa; nunca gera erro).
+  Ao carregar, um aviso informa quantos eventos cada tarefa tem.
 - Erros dizem arquivo, linha, campo e motivo, por exemplo:
   `config.txt:2: campo 'periodo' = -3: valor negativo não é permitido (...)`.
 
@@ -210,8 +278,15 @@ Mais exemplos em `exemplos/` e `tests/validos/`.
   nominal de uma tarefa (`include/sched.h`). Para incluir um novo, crie `src/sched/sched_xxx.c` e registre em
   `src/sched/sched_registro.c`, ou compile como biblioteca dinâmica (`plugins/exemplo_fifo.c`,
   `make plugins`) e carregue com `--plugin`.
-- **Interface**: terminal com cores ANSI 24-bit e imagem final em SVG gerada à
-  mão — nenhuma biblioteca gráfica.
+- **Interface sem biblioteca**: a janela é desenhada pelo próprio programa
+  num vetor de pixels (`src/gfx/tela.c`, com uma fonte 8x16 embutida em
+  `src/gfx/fonte.c`), e um arquivo por sistema só abre a janela e copia a
+  imagem para ela: no Linux/WSL, `gfx_x11.c` fala o protocolo X11 direto no
+  socket do servidor gráfico (sem libX11); no Windows, `gfx_win32.c` usa a API
+  Win32; no macOS, `gfx_cocoa.c` usa o Cocoa pelo runtime do Objective-C, em C.
+  Nada precisa ser instalado além do compilador. A interface de terminal (cores
+  ANSI 24-bit) continua disponível com `--terminal`, e a imagem final é um SVG
+  gerado à mão.
 
 ## Estrutura
 
@@ -221,6 +296,7 @@ projetoSO/
 │   ├── main.c              # argumentos de linha de comando e fluxo principal
 │   ├── core/
 │   │   ├── config.c        # leitura e validação do arquivo, valores padrão
+│   │   ├── edicao.c        # regras de edição de tarefas (comuns às duas interfaces)
 │   │   ├── sim.c           # relógio, ativações, ciclo do tick, eventos
 │   │   ├── history.c       # snapshots (avançar/retroceder) e rastro do Gantt
 │   │   └── util.c          # strings, números, terminal, gerador aleatório
@@ -231,10 +307,18 @@ projetoSO/
 │   │   └── sched_registro.c  # tabela de escalonadores e carga de plugins
 │   ├── gantt/
 │   │   ├── gantt_tui.c     # Gantt no terminal
+│   │   ├── gantt_gfx.c     # Gantt na janela gráfica
 │   │   └── gantt_svg.c     # exportação SVG
+│   ├── gfx/
+│   │   ├── tela.c          # desenho em memória (retângulos, linhas, texto)
+│   │   ├── fonte.c         # fonte bitmap 8x16 embutida
+│   │   ├── gfx_x11.c       # janela no Linux/WSL (protocolo X11 direto)
+│   │   ├── gfx_win32.c     # janela no Windows (Win32)
+│   │   └── gfx_cocoa.c     # janela no macOS (Cocoa)
 │   └── ui/
-│       └── ui.c            # tela de configuração, modo passo a passo e modo completo
-├── include/                # cabeçalhos (config.h, task.h, sim.h, sched.h, gantt.h, ui.h, util.h)
+│       ├── ui.c            # interface de terminal: configuração, passo a passo e completo
+│       └── ui_gui.c        # a mesma interface na janela gráfica
+├── include/                # cabeçalhos (config.h, task.h, sim.h, sched.h, gantt.h, ui.h, util.h, edicao.h, gfx.h, tela.h)
 ├── plugins/                # escalonador de exemplo carregado com dlopen
 ├── exemplos/               # figuras 2.5 e 2.6 do capítulo, várias CPUs, quantum
 ├── tests/                  # arquivos válidos/inválidos e run_tests.sh

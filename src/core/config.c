@@ -421,6 +421,14 @@ static void ler_linha_tarefa(Ctx *c, char *s, int **ids, int **linhas_id, int *n
                     "no Gantt elas ficarão iguais", c->arq, c->linha, t.id, t.cor,
                     cfg->tarefas[i].id);
     config_adicionar(cfg, &t);
+    /* Req. 3.3.5: a lista de eventos só será tratada no Projeto B. Por
+     * enquanto ela é lida e guardada no TCB, mas não muda a simulação; o
+     * aviso mostra que o campo foi lido (e não ignorado por engano). */
+    const TarefaCfg *nova = &cfg->tarefas[cfg->n - 1];
+    if (nova->nev > 0)
+        msg_add(&cfg->avisos, "%s:%d: tarefa %d tem %d evento(s) em lista_eventos (%.60s%s): "
+                "lidos e guardados", c->arq, c->linha, t.id, nova->nev, nova->eventos,
+                strlen(nova->eventos) > 60 ? "..." : "");
 }
 
 /* Lê o arquivo inteiro para a memória. Devolve NULL e registra o erro.

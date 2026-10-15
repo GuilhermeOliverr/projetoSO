@@ -24,7 +24,7 @@ confirmar as ambiguidades com o professor (ver o fim deste arquivo).
 
 | Grupo | Situação |
 |---|---|
-| G1–G6 | Ok: preemptivo, de 1 a 64 CPUs, Gantt com legenda no terminal e em SVG, avançar/retroceder, só libc (+ `dlopen`), código comentado com justificativas. |
+| G1–G6 | Ok: preemptivo, de 1 a 64 CPUs, Gantt com legenda na janela gráfica, no terminal e em SVG, avançar/retroceder, só libc (+ `dlopen`) e o que já vem em cada sistema, código comentado com justificativas. |
 | A1.1–A1.5.3 | Ok: relógio em ticks; fila global; CPU desligada no Gantt, no resumo e nas estatísticas; TCB único; um snapshot por tick; modos passo a passo e completo. |
 | A2.1–A2.5 | Ok: cor por tarefa, pronta sem cor, suspensa preta pontilhada, CPU indicada, marcadores no **instante exato** (agora também no terminal), SVG sem limite de tempo, menor ID embaixo. |
 | A3.1–A3.4 | Ok: parser tolerante; erros com linha, campo e motivo; valores padrão com aviso; caminho livre; edição validada. |
@@ -363,5 +363,87 @@ O professor deixou estes pontos em aberto de propósito: cada escolha vale se fo
 | 7 | Escalonador devolve prioridade | **Função `prioridade(k, agora)`**, não "a próxima tarefa" | O enunciado diz "idealmente". Com M CPUs e fila global é preciso escolher as M melhores, e o desempate (critérios 1 a 5) fica num lugar só, igual para todo algoritmo. O capítulo trata RM, EDF e DM como formas de atribuir prioridade sobre o mesmo mecanismo. Novos algoritmos entram por tabela de registro ou por `.so` sem tocar na simulação. |
 | 1 | Quantum | Lido e guardado; RM/EDF decidem só por prioridade | Resposta do professor: usar o quantum é "específico de cada escalonador". |
 | 4 | Entre ativações | `T_SUSPENSA` com `motivo = SUSP_PERIODO`, desenhada vazia | Maziero inclui espera por tempo em "suspensa"; o Gantt segue as Figuras 2.5 e 2.6 do capítulo. |
+| 8 | Interface | **Janela gráfica** feita em C, sem biblioteca de interface; o terminal continua com `--terminal` | O enunciado pede "visualização gráfica" (req. 3 e 2.x) e interface intuitiva (req. 5), mas proíbe instalar biblioteca extra (req. 5 dos gerais). GTK, Qt ou SDL exigiriam instalação. Por isso o programa desenha tudo sozinho e usa só o que já vem em cada sistema para abrir a janela. Detalhes na seção abaixo. |
 
 Também fica registrado: o repositório agora tem `.gitattributes` com `eol=lf`, porque no Windows o `core.autocrlf=true` convertia `tests/run_tests.sh` e os exemplos para CRLF e o `make test` quebrava no WSL. O arquivo `tests/validos/05_finais_de_linha_windows.txt` é exceção (`-text`), pois testa justamente CRLF.
+
+## Atualização de 2026-10-14: interface gráfica
+
+### Decisão
+
+Por padrão, o programa abre uma **janela gráfica** com as mesmas funções da interface de
+terminal: escolher o arquivo, revisar e editar a configuração, rodar passo a passo ou a execução
+completa, editar tarefas durante a simulação e exportar o SVG. A interface de terminal continua
+igual e é usada com `--terminal`, com `--modo` (scripts e `make test`) ou quando não há servidor
+gráfico (o programa avisa o motivo e segue no terminal).
+
+### Por que não precisa instalar nada
+
+- **Desenho e fonte**: o próprio programa pinta a imagem em memória (`src/gfx/tela.c`) com uma
+  fonte 8x16 embutida no código (`src/gfx/fonte.c`, fonte "Fixed" do X11, domínio público).
+- **Janela**, um arquivo por sistema, cada um compilado só no sistema dele (`#ifdef`):
+  - Linux/WSL: `src/gfx/gfx_x11.c` fala o protocolo X11 direto no socket do servidor gráfico,
+    com `socket`/`write`/`read` da libc, sem libX11;
+  - Windows: `src/gfx/gfx_win32.c` usa a API Win32 (`user32`/`gdi32`), parte do Windows;
+  - macOS: `src/gfx/gfx_cocoa.c` usa o Cocoa pelo runtime do Objective-C, chamado de C.
+- **Executável Linux**: depende só da `libc.so.6` (glibc 2.34 ou mais nova). O `-ldl` do
+  Makefile não é um pacote à parte: faz parte da glibc e só existe por causa dos plugins.
+- **Executável Windows** (compilado com `-static`): depende só de `KERNEL32`, `USER32`, `GDI32` e
+  `msvcrt`, todas do próprio Windows.
+
+### Requisito "executar sem instalar" (req. 5 dos gerais)
+
+O enunciado fala em **executar** sem instalar biblioteca, software ou runtime, e não fala em
+`make` nem em compilar. Compilar exige o `gcc`, que é instalado (`build-essential`, MSYS2). Para
+não depender disso, a equipe pode **entregar os executáveis já compilados** (Linux e Windows), com
+o código-fonte e o Makefile junto. A confirmar com o professor: se ele vai rodar no PC dele ou se
+a equipe apresenta no próprio notebook.
+
+### Outras mudanças
+
+- As regras de edição de tarefa (validações, período, prazo, ingresso, suspender/retomar e
+  encerrar) foram para `src/core/edicao.c`. O terminal (`ui.c`) e a janela (`ui_gui.c`) usam o
+  mesmo código.
+- O Gantt da janela (`src/gantt/gantt_gfx.c`) usa os mesmos símbolos do SVG e mostra também a
+  linha do instante atual.
+- O Makefile detecta o sistema e escolhe as bibliotecas do sistema (`-lgdi32` no Windows,
+  frameworks no macOS). Para gerar o `.exe` a partir do Linux:
+  `make CC=x86_64-w64-mingw32-gcc TARGET=projetoSO.exe`.
+
+### Arquivo no pendrive (req. 3.3.4)
+
+O professor pode trazer o arquivo de configuração num pendrive. O caminho sempre pôde ser
+qualquer um (digitado na janela, passado na linha de comando ou, no Windows, algo como
+`E:\teste.txt`), mas chegar até o pendrive pela lista de arquivos exigia muitos cliques em
+"Pasta acima" e, no Windows, não dava para trocar de unidade. Por isso a tela de abrir arquivo
+ganhou atalhos:
+
+| Botão | Linux | Windows | macOS |
+|---|---|---|---|
+| Pendrives e discos | `/media/<usuário>` (ou `/run/media/<usuário>`; sem eles, `/media` ou `/mnt`) | lista de unidades com o tipo, ex.: `E:  (pendrive / removível)` | `/Volumes` |
+| Pasta pessoal | `$HOME` | `%USERPROFILE%` | `$HOME` |
+| Pasta do programa | pasta onde o programa foi aberto | idem | idem |
+| Pasta acima | sobe até `/` | sobe até `E:/` e depois volta à lista de unidades | sobe até `/` |
+
+- A lista agora usa caminhos absolutos (antes subir gerava `../../..`), e o arquivo carregado
+  aparece com o caminho completo na configuração.
+- A lista de unidades do Windows vem de `GetLogicalDrives`/`GetDriveTypeA` (`gfx_unidades` em
+  `src/gfx/gfx_win32.c`), da própria API do Windows. No Linux e no macOS a função devolve 0,
+  porque lá os pendrives aparecem como pastas.
+- Sem pendrive conectado, a lista avisa: "nenhum pendrive encontrado: conecte-o e clique em
+  'Pendrives e discos' de novo".
+- Ainda não suportado na caixa de texto: colar (Ctrl+V) e, no Linux, letras acentuadas feitas
+  com tecla morta (ã, é, ô). Nesses casos, basta clicar no arquivo na lista.
+
+### Como foi verificado
+
+| Sistema | Situação |
+|---|---|
+| Linux (X11) | Testado na janela real, com capturas de todas as telas, inclusive no tamanho mínimo. Sessão completa no valgrind: 0 erros e 0 vazamentos, e o X da janela encerra com código 0. `make test`: 62 de 62 testes passam, compilando sem warnings. |
+| WSL no Windows 11 | Usa o mesmo código do Linux, pelo WSLg. Não testado à parte. |
+| Navegação até o pendrive | Linux: os quatro atalhos, a subida até `/` e o carregamento pela lista foram testados na janela, mas sem pendrive conectado (só o aviso "nenhum pendrive encontrado"). Windows e macOS: só compilados. |
+| Windows nativo | Compila sem warnings com MinGW. **Falta testar num PC com Windows**, inclusive a lista de unidades. O Wine foi usado só como ferramenta de teste nesta máquina e não é dependência do programa. |
+| macOS | Só a verificação de sintaxe passou (compilando no Linux com `-D__APPLE__`). **Falta testar num Mac.** |
+
+O bloqueio do Smart App Control a `.exe` sem assinatura (já descrito no README) continua valendo
+e não tem relação com bibliotecas.
