@@ -12,7 +12,7 @@
  * precisamos das M melhores, não só da melhor, e o desempate (critérios 1 a
  * 5 do enunciado) é igual para todos os algoritmos. E, sendo um número, a
  * simulação consegue separar a prioridade nominal (do algoritmo) da ativa
- * (a comparada de fato), o que a herança de prioridade do Projeto B exige.
+ * (a comparada de fato).
  *
  * Para adicionar um algoritmo:
  *   1. crie sched_xxx.c com uma função prioridade_fn e um `const Escalonador`;
@@ -50,8 +50,8 @@ void sched_listar_nomes(char *buf, int tam);  /* "RM, EDF" para mensagens */
 int sched_carregar_plugin(const char *caminho, char *erro, int tam_erro);
 
 /* ---- prioridade e desempate comum (sched_tie.c) ---- */
-/* Recalcula prio_nominal com o algoritmo `e` e copia para prio_ativa (no
- * Projeto A não há herança de prioridade). */
+/* Recalcula prio_nominal com o algoritmo `e` e copia para prio_ativa (não
+ * há herança de prioridade). */
 void sched_atualizar(const Escalonador *e, TCB *k, int agora);
 
 /* Critérios 1 a 4 do enunciado (o 5, sorteio, é feito pela simulação, que

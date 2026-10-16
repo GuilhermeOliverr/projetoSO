@@ -141,16 +141,16 @@ void config_liberar_tarefa(TarefaCfg *t) {
 }
 
 /* Guarda o texto de lista_eventos e o separa em itens. O formato dos
- * eventos só será definido no Projeto B, então aqui NÃO interpretamos nem
- * rejeitamos nada: só guardamos cada pedaço (requisito 3.3.5: podem existir
- * "inúmeros eventos", por isso o vetor é dinâmico, sem limite). */
+ * eventos não é definido, então NÃO interpretamos nem rejeitamos nada: só
+ * guardamos cada pedaço (requisito 3.3.5: podem existir "inúmeros eventos",
+ * por isso o vetor é dinâmico, sem limite). */
 void config_definir_eventos(TarefaCfg *t, const char *texto) {
     /* Copia antes de liberar: `texto` pode ser o próprio t->eventos. */
     char *raw = xstrdup(texto ? texto : "");
     config_liberar_tarefa(t);
     t->eventos = raw;
-    /* Aceitamos ',' e ';' como separadores porque o formato do Projeto B
-     * ainda não foi divulgado; itens vazios (ex.: ";;") são ignorados. */
+    /* Aceitamos ',' e ';' como separadores porque o formato dos eventos
+     * não é definido; itens vazios (ex.: ";;") são ignorados. */
     char *copia = xstrdup(raw);
     int cap = 0;
     /* strpbrk acha o próximo separador; trocamos por '\0' para isolar o
@@ -198,7 +198,7 @@ typedef struct {
 
 /* Divide `s` (modificado in-place) em até `max` campos separados por ';'.
  * Se `resto` != NULL, o último campo recebe todo o restante da linha (usado
- * para lista_eventos, que pode ter qualquer formato no Projeto B). Um ';'
+ * para lista_eventos, que pode ter qualquer formato). Um ';'
  * final não cria campo extra (req. 3.3.3).
  *
  * Como funciona: cada ';' é trocado por '\0' (fim de string do C), e
@@ -421,9 +421,9 @@ static void ler_linha_tarefa(Ctx *c, char *s, int **ids, int **linhas_id, int *n
                     "no Gantt elas ficarão iguais", c->arq, c->linha, t.id, t.cor,
                     cfg->tarefas[i].id);
     config_adicionar(cfg, &t);
-    /* Req. 3.3.5: a lista de eventos só será tratada no Projeto B. Por
-     * enquanto ela é lida e guardada no TCB, mas não muda a simulação; o
-     * aviso mostra que o campo foi lido (e não ignorado por engano). */
+    /* Req. 3.3.5: a lista de eventos é lida e guardada no TCB, mas não muda
+     * a simulação; o aviso mostra que o campo foi lido (e não ignorado por
+     * engano). */
     const TarefaCfg *nova = &cfg->tarefas[cfg->n - 1];
     if (nova->nev > 0)
         msg_add(&cfg->avisos, "%s:%d: tarefa %d tem %d evento(s) em lista_eventos (%.60s%s): "

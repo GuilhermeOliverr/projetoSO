@@ -52,7 +52,6 @@ int sched_desempate(const TCB *a, const TCB *b) {
  * ativação, por isso não basta calcular uma vez). */
 void sched_atualizar(const Escalonador *e, TCB *k, int agora) {
     k->prio_nominal = e->prioridade(k, agora);
-    /* Projeto B: aqui entra a herança (prio_ativa = min(nominal, herdada)). */
     k->prio_ativa = k->prio_nominal;
 }
 

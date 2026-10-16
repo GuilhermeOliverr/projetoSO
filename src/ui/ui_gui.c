@@ -764,7 +764,7 @@ static bool form_tarefa(const char *titulo, TarefaCfg *t, const int *ids, int ni
                         char *eventos, size_t tam_ev) {
     Campo c[CT_N] = {
         {"id", "", false}, {"cor (RGB hex)", "", false}, {"ingresso", "", false}, {"duração (C)", "", false},
-        {"período (P)", "", false}, {"prazo (D)", "", false}, {"eventos (Projeto B)", "", false},
+        {"período (P)", "", false}, {"prazo (D)", "", false}, {"eventos", "", false},
     };
     snprintf(c[CT_ID].valor, sizeof c[0].valor, "%d", t->id);
     snprintf(c[CT_COR].valor, sizeof c[0].valor, "%06X", t->cor);
@@ -1186,7 +1186,7 @@ static int tela_config(Config *cfg) {
         for (int i = 0; i < cfg->n; i++) u += (double)cfg->tarefas[i].duracao / cfg->tarefas[i].periodo;
         linhas_utilizacao(&util, cfg->n, u, cfg->algoritmo);
         int h_util = linhas_visuais(&util, w - 24) * LINHA + 10;
-        /* avisos do arquivo (ex.: eventos guardados para o Projeto B), com
+        /* avisos do arquivo (ex.: eventos lidos e guardados), com
          * quebra de linha; até 6 linhas, o resto rola com a roda do mouse */
         Linhas avisos = {0};
         for (int i = 0; i < cfg->avisos.n; i++) lin_add(&avisos, C_AVISO, false, "aviso: %s", cfg->avisos.itens[i]);
@@ -1456,7 +1456,7 @@ static void linhas_tarefa(const Sessao *z, int i, Linhas *L) {
             if (j) strcat(evs, " | ");
             strcat(evs, k->eventos[j]);
         }
-        lin_add(L, C_FRACO, false, "Eventos (Projeto B): %s", evs);
+        lin_add(L, C_FRACO, false, "Eventos: %s", evs);
     }
     if (k->termino >= 0) lin_add(L, C_TEXTO, false, "Terminou no instante %d", k->termino);
 }
