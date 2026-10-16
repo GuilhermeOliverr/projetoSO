@@ -29,66 +29,60 @@
  * caso didático e ainda cabe no Gantt. */
 #define MAX_CPUS 64
 
+// Estrutura que armazena os parâmetros de configuração de uma única tarefa
 typedef struct {
     int id;
     unsigned cor;
-    int ingresso, duracao, periodo, prazo;
-    char *eventos;   /* texto cru de lista_eventos ("" se não houver) */
-    int linha;       /* linha do arquivo (0 = criada pelo usuário)     */
-    /* lista_eventos separada em itens (vetor dinâmico, sem limite). O
-     * formato de cada evento só será definido no Projeto B, então aqui os
-     * itens são guardados sem interpretação e nunca causam erro. */
-    char **lista_ev;
-    int nev;
+    int ingresso, 
+        duracao,     // Intervalo de tempo regular em ticks entre duas ativações consecutivas
+        periodo,     // Prazo relativo para a conclusão da tarefa
+        prazo;
+    char *eventos;   // Ponteiro para a string original da lista de eventos
+    int linha;      // Número da linha do arquivo .txt onde a tarefa foi lida (0 se criada na interface)
+    char **lista_ev;     // Vetor dinâmico de strings contendo os eventos já separados por ',' ou ';'
+    int nev;     // Quantidade total de eventos presentes em lista\_ev
 } TarefaCfg;
 
+// Estrutura para acúmulo de mensagens de avisos e erros durante a leitura do arquivo
 typedef struct {
-    char **itens;
-    int n, cap;
+    char **itens;    // Vetor dinâmico com o texto de cada mensagem de erro/aviso acumulada
+    int n, cap;    // n = quantidade atual de mensagens , cap = capacidade alocada do vetor
 } ListaMsg;
 
+// Estrutura principal que armazena toda a configuração global do sistema simulado
 typedef struct {
-    char *caminho;
-    int algoritmo;          /* índice no registro de escalonadores */
-    int quantum;
-    int ncpus;
-    TarefaCfg *tarefas;     /* só as periódicas (aperiódicas são descartadas) */
-    int n, cap;
-    ListaMsg avisos;        /* problemas não fatais (ex.: tarefa aperiódica) */
-    ListaMsg erros;         /* problemas fatais                              */
+    char *caminho;    // Nome ou caminho completo do arquivo de configuração carregado
+    int algoritmo;         // Índice/Identificador do algoritmo de escalonamento ativo
+    int quantum;    // Valor do quantum de tempo em ticks
+    int ncpus;       // número de cpus
+    TarefaCfg *tarefas;    // Vetor dinâmico com a configuração de todas as tarefas periódicas
+    int n, cap;        // n = número total de tarefas , cap = capacidade alocada do vetor
+    ListaMsg avisos;        // Lista contendo problemas não fatais (ex: tarefa aperiódica) 
+    ListaMsg erros;         // Lista contendo erros fatais que impedem a execução
 } Config;
 
-/* Preenche `cfg` com os valores padrão e nenhuma tarefa. */
-void config_padrao(Config *cfg);
+/* Protótipos das Funções do Módulo de Configuração */
 
-/* Carrega o arquivo. Devolve true se não houve erros (avisos podem existir). */
-bool config_carregar(const char *caminho, Config *cfg);
+void config_padrao(Config *cfg);    // Inicializa a estrutura Config com os valores padrão sugeridos
 
-void config_liberar(Config *cfg);
+bool config_carregar(const char *caminho, Config *cfg);    // Realiza a leitura (parser) e validação do arquivo de entrada
 
-/* Imprime avisos e erros acumulados. */
-void config_imprimir_mensagens(const Config *cfg);
+void config_liberar(Config *cfg);    // Libera toda a memória dinâmica alocada pela estrutura Config
 
-/* Cor padrão para a tarefa de índice i (paleta com cores bem distintas). */
-unsigned config_cor_padrao(int i);
+void config_imprimir_mensagens(const Config *cfg);    // Imprime na interface todos os avisos e erros acumulados
 
-/* Acrescenta uma tarefa (cópia de `t`; os eventos são duplicados a partir
- * de t->eventos, a lista_ev de `t` é ignorada). */
-void config_adicionar(Config *cfg, const TarefaCfg *t);
+unsigned config_cor_padrao(int i);    // Retorna uma cor padrão da paleta para a i-ésima tarefa
 
-/* Troca a lista de eventos da tarefa pelo texto `texto` (copiado), já
- * separando os itens por ',' ou ';'. Libera a lista anterior. */
-void config_definir_eventos(TarefaCfg *t, const char *texto);
+void config_adicionar(Config *cfg, const TarefaCfg *t);    // Adiciona uma nova tarefa ao vetor dinâmico de tarefas
 
-/* Libera a memória própria de uma tarefa (texto e lista de eventos). */
-void config_liberar_tarefa(TarefaCfg *t);
+void config_definir_eventos(TarefaCfg *t, const char *texto);    // Divide a string de eventos por delimitadores e armazena em lista_ev
 
-/* Validação comum ao arquivo e às telas de edição. Devolve NULL se ok, ou
- * o motivo do erro. */
-const char *config_validar_quantum(int v);
-const char *config_validar_cpus(int v);
+void config_liberar_tarefa(TarefaCfg *t);    // Libera a memória associada à string de eventos de uma taref
 
-void msg_add(ListaMsg *l, const char *fmt, ...);
-void msg_liberar(ListaMsg *l);
+const char *config_validar_quantum(int v);    // Valida se o quantum informado é maior ou igual a 0
+const char *config_validar_cpus(int v);    // Valida se o número de CPUs está dentro do intervalo permitido (1 a MAX\_CPUS)
+
+void msg_add(ListaMsg *l, const char *fmt, ...);    // Formata e insere uma nova mensagem na estrutura ListaMsg
+void msg_liberar(ListaMsg *l);    // Libera a memória alocada para a estrutura ListaMsg
 
 #endif
