@@ -15,23 +15,26 @@
 
 #include "task.h"
 
-const char *valida_positivo(int v);
-const char *valida_periodo(int v);
-/* Ingresso não pode ser antes de `min` (não se chega no passado). */
-const char *valida_ingresso(int v, int min);
-/* `ids` tem `n` ids em uso; `proprio` é a posição da tarefa sendo editada
- * (-1 para uma tarefa nova), cujo id atual não conta como repetido. */
-const char *valida_id(int v, const int *ids, int n, int proprio);
+/* FUNÇÕES DE VALIDAÇÃO (Retornam NULL se válido ou uma string de erro caso recuse) */
 
-/* Período novo: a próxima chegada passa a ser a última chegada + período. */
-void edicao_periodo(TCB *k, int v);
-/* Prazo novo: recalcula o deadline da ativação em andamento, se houver. */
-void edicao_prazo(TCB *k, int v);
-/* Ingresso novo (só antes da primeira chegada). */
-void edicao_ingresso(TCB *k, int v);
-/* Suspende (pelo usuário) ou retoma a tarefa. */
-void edicao_alternar_suspensao(TCB *k);
-/* Encerra a tarefa no instante t, como se tivesse feito as 10 ativações. */
-void edicao_encerrar(TCB *k, int t);
+const char *valida_positivo(int v);  // Recebe um inteiro 'v' e verifica se é estritamente positivo (> 0). Usado para duração, período e prazo
+
+const char *valida_periodo(int v);  // Valida se o novo período 'v' cumpre as regras do sistema (> 0)
+
+const char *valida_ingresso(int v, int min);  // Garante que o novo instante de ingresso 'v' não seja menor que 'min' (tick atual da simulação)
+
+const char *valida_id(int v, const int *ids, int n, int proprio);  // Verifica se o ID 'v' informado é único e não colide com outros IDs já existentes no sistema
+
+/* FUNÇÕES DE APLICAÇÃO (Modificam o TCB e reajustam campos dependentes) */
+
+void edicao_periodo(TCB *k, int v);  // Atualiza o período no TCB 'k' para 'v' e recalcula a data da próxima liberação da tarefa ( a próxima chegada passa a ser a última chegada + período)
+
+void edicao_prazo(TCB *k, int v);  // Altera o prazo relativo para 'v' e ajusta imediatamente o deadline absoluto (deadline\_abs) da ativação atual
+
+void edicao_ingresso(TCB *k, int v);  // Altera o instante do primeiro ingresso da tarefa
+
+void edicao_alternar_suspensao(TCB *k);  // Alterna a tarefa entre o estado suspenso e o normal (pausa/retoma a disputa pela CPU)
+
+void edicao_encerrar(TCB *k, int t);  // Força o encerramento imediato da tarefa no tick 't' ajustando seu número de ativações para 10
 
 #endif
