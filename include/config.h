@@ -33,14 +33,14 @@
 typedef struct {
     int id;
     unsigned cor;
-    int ingresso, 
-        duracao,     // Intervalo de tempo regular em ticks entre duas ativações consecutivas
-        periodo,     // Prazo relativo para a conclusão da tarefa
-        prazo;
+    int ingresso,    // Instante (tick) da primeira chegada da tarefa
+        duracao,     // C: ticks de CPU que a tarefa precisa em cada ativação
+        periodo,     // P: intervalo em ticks entre duas ativações consecutivas
+        prazo;       // D: prazo relativo à chegada de cada ativação (deadline = chegada + prazo)
     char *eventos;   // Ponteiro para a string original da lista de eventos
     int linha;      // Número da linha do arquivo .txt onde a tarefa foi lida (0 se criada na interface)
     char **lista_ev;     // Vetor dinâmico de strings contendo os eventos já separados por ',' ou ';'
-    int nev;     // Quantidade total de eventos presentes em lista\_ev
+    int nev;     // Quantidade total de eventos presentes em lista_ev
 } TarefaCfg;
 
 // Estrutura para acúmulo de mensagens de avisos e erros durante a leitura do arquivo
@@ -77,10 +77,10 @@ void config_adicionar(Config *cfg, const TarefaCfg *t);    // Adiciona uma nova 
 
 void config_definir_eventos(TarefaCfg *t, const char *texto);    // Divide a string de eventos por delimitadores e armazena em lista_ev
 
-void config_liberar_tarefa(TarefaCfg *t);    // Libera a memória associada à string de eventos de uma taref
+void config_liberar_tarefa(TarefaCfg *t);    // Libera a memória associada à string de eventos de uma tarefa
 
-const char *config_validar_quantum(int v);    // Valida se o quantum informado é maior ou igual a 0
-const char *config_validar_cpus(int v);    // Valida se o número de CPUs está dentro do intervalo permitido (1 a MAX\_CPUS)
+const char *config_validar_quantum(int v);    // Valida se o quantum informado é maior que 0
+const char *config_validar_cpus(int v);    // Valida se o número de CPUs está dentro do intervalo permitido (1 a MAX_CPUS)
 
 void msg_add(ListaMsg *l, const char *fmt, ...);    // Formata e insere uma nova mensagem na estrutura ListaMsg
 void msg_liberar(ListaMsg *l);    // Libera a memória alocada para a estrutura ListaMsg

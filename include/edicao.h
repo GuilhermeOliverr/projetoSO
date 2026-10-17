@@ -29,7 +29,7 @@ const char *valida_id(int v, const int *ids, int n, int proprio);  // Verifica s
 
 void edicao_periodo(TCB *k, int v);  // Atualiza o período no TCB 'k' para 'v' e recalcula a data da próxima liberação da tarefa ( a próxima chegada passa a ser a última chegada + período)
 
-void edicao_prazo(TCB *k, int v);  // Altera o prazo relativo para 'v' e ajusta imediatamente o deadline absoluto (deadline\_abs) da ativação atual
+void edicao_prazo(TCB *k, int v);  // Altera o prazo relativo para 'v' e ajusta imediatamente o deadline absoluto (deadline_abs) da ativação atual
 
 void edicao_ingresso(TCB *k, int v);  // Altera o instante do primeiro ingresso da tarefa
 
