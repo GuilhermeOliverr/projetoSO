@@ -19,7 +19,11 @@
 /* Máscara de eventos por célula (tarefa x tick), usada pelos dois
  * desenhos. */
 enum {
-    M_CHEGADA = 1, M_FIM = 2, M_TERMINO = 4, M_PRAZO = 8, M_SORTEIO = 16,
+    M_CHEGADA = 1, 
+    M_FIM = 2, 
+    M_TERMINO = 4, 
+    M_PRAZO = 8, 
+    M_SORTEIO = 16,
 };
 
 /* Preenche mask[(instante - ini) * n + tarefa] para instantes em
