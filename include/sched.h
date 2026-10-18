@@ -25,40 +25,31 @@
 
 #include "task.h"
 
-/* Prioridade nominal da tarefa `k` no tick `agora` (útil para algoritmos
- * dinâmicos). MENOR valor = MAIOR prioridade; valores iguais empatam e aí
- * entra a cadeia de desempate. */
+// Define o tipo de ponteiro de função 'prioridade\_fn' que calcula e retorna a prioridade nominal da tarefa 'k' no tick 'agora'
 typedef int (*prioridade_fn)(const TCB *k, int agora);
 
+// Início da definição da estrutura que representa um algoritmo de escalonamento ("plugin")
 typedef struct {
-    const char *nome;          /* string usada no arquivo (sem diferenciar caixa) */
-    const char *descricao;     /* texto mostrado ao usuário                       */
-    prioridade_fn prioridade;
+    const char *nome;         // Ponteiro para a string com o nome/sigla do algoritmo no arquivo de configuração (exemplo: "RM" ou "EDF")
+    const char *descricao;     // Ponteiro para a string descritiva do algoritmo apresentada ao usuário na interface
+    prioridade_fn prioridade;    // Ponteiro para a função específica do algoritmo responsável por calcular a prioridade nominal da tarefa
 } Escalonador;
 
 /* Nome do símbolo que um plugin .so deve exportar. */
 #define SCHED_SIMBOLO_PLUGIN "escalonador_plugin"
 
 /* ---- registro (sched_registro.c) ---- */
-int sched_quantidade(void);
-const Escalonador *sched_obter(int idx);
-int sched_buscar(const char *nome);          /* índice ou -1 */
-void sched_listar_nomes(char *buf, int tam);  /* "RM, EDF" para mensagens */
+int sched_quantidade(void);    // Retorna o número total de escalonadores registrados na tabela do simulador
+const Escalonador *sched_obter(int idx);    // Retorna um ponteiro para a estrutura do escalonador no índice 'idx' da tabela
+int sched_buscar(const char *nome);          // Procura um algoritmo registrado pelo nome (sem diferenciar maiúsculas/minúsculas) e retorna seu índice ou -1
+void sched_listar_nomes(char *buf, int tam);      // Formata o buffer 'buf' com a lista dos nomes registrados (ex: "RM, EDF") para exibição em mensagens
 
-/* Carrega um escalonador de uma biblioteca dinâmica. Devolve o índice ou -1,
- * com o motivo em `erro`. */
-int sched_carregar_plugin(const char *caminho, char *erro, int tam_erro);
+int sched_carregar_plugin(const char *caminho, char *erro, int tam_erro);    // Carrega dinamicamente um novo algoritmo de uma biblioteca (.so) e retorna seu índice ou -1 em caso de falha
 
-/* ---- prioridade e desempate comum (sched_tie.c) ---- */
-/* Recalcula prio_nominal com o algoritmo `e` e copia para prio_ativa (não
- * há herança de prioridade). */
-void sched_atualizar(const Escalonador *e, TCB *k, int agora);
+void sched_atualizar(const Escalonador *e, TCB *k, int agora);    // Calcula a prioridade nominal da tarefa 'k' com o algoritmo 'e' e copia o resultado para a prioridade ativa
 
-/* Critérios 1 a 4 do enunciado (o 5, sorteio, é feito pela simulação, que
- * tem o gerador aleatório). < 0 se `a` vem antes de `b`, > 0 se depois. */
-int sched_desempate(const TCB *a, const TCB *b);
+int sched_desempate(const TCB *a, const TCB *b);    // Compara as tarefas 'a' e 'b' aplicando estritamente os critérios de 1 a 4 da cadeia de desempate (retorna < 0 se 'a' vem antes, > 0 se depois)
 
-/* Prioridade ativa + desempate: ordem usada para escolher as tarefas. */
-int sched_comparar(const TCB *a, const TCB *b);
+int sched_comparar(const TCB *a, const TCB *b);    // Compara duas tarefas considerando a prioridade ativa e, em caso de empate, aplicando a cadeia de desempate
 
 #endif
