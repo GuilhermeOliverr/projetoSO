@@ -19,61 +19,43 @@
 /* Máscara de eventos por célula (tarefa x tick), usada pelos dois
  * desenhos. */
 enum {
-    M_CHEGADA = 1, 
-    M_FIM = 2, 
-    M_TERMINO = 4, 
-    M_PRAZO = 8, 
-    M_SORTEIO = 16,
+    M_CHEGADA = 1,     // Bit 0 (1): Marcador de chegada/ingresso de nova ativação (↓)
+    M_FIM = 2,     // Bit 1 (2): Marcador de fim de uma ativação comum (↑ ou △)
+    M_TERMINO = 4,     // Bit 2 (4): Marcador de término definitivo da 10ª ativação (■)
+    M_PRAZO = 8,     // Bit 3 (8): Marcador de perda de prazo / deadline miss (✗ em vermelho)
+    M_SORTEIO = 16,    // Bit 4 (16): Marcador de sorteio no critério 5 de desempate (?)
 };
 
-/* Preenche mask[(instante - ini) * n + tarefa] para instantes em
- * [ini, fim): cada evento cai na coluna do seu instante exato. */
-void gantt_mascaras(const Simulador *s, int ini, int fim, unsigned char *mask);
+void gantt_mascaras(const Simulador *s, int ini, int fim, unsigned char *mask);      // Preenche a matriz de máscaras combinando os eventos ocorridos em cada célula (tarefa x tick) para a faixa [ini, fim)  
 
-/* Índices das tarefas ordenados por id DECRESCENTE (ordem de cima para
- * baixo no gráfico). O chamador libera. */
-int *gantt_ordem(const Estado *e);
+int *gantt_ordem(const Estado *e);        // Aloca e retorna um vetor contendo os índices das tarefas ordenados por ID decrescente (exigência do eixo Y: maior ID no topo)
 
-/* Terminal: desenha os ticks [ini, fim). */
-void gantt_tui(const Simulador *s, int ini, int fim);
+void gantt_tui(const Simulador *s, int ini, int fim);    // Desenha a faixa de tempo [ini, fim) do Gráfico de Gantt no terminal utilizando cores e caracteres ANSI 24-bit
 
-/* Terminal: desenha a simulação inteira, quebrando em faixas da largura
- * da tela. */
-void gantt_tui_completo(const Simulador *s);
+void gantt_tui_completo(const Simulador *s);    // Renderiza a simulação completa no terminal, dividindo o gráfico em faixas ajustadas à largura da tela
 
-/* Linha do tempo em texto, um trecho por linha (útil para conferir à mão
- * e nos testes automáticos). */
-void gantt_texto(const Simulador *s);
+void gantt_texto(const Simulador *s);    // Gera uma representação simplificada da linha do tempo em texto puro (utilizada para conferência manual e testes unitários)
 
-/* SVG com a simulação inteira. Devolve false e o motivo em `erro`. */
-bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo,
-               char *erro, int tam_erro);
+bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char *erro, int tam_erro);    // Exporta a simulação completa para um arquivo vetorial .svg em disco (Requisito 2.4)
 
-/* ---- Janela gráfica (gantt_gfx.c) ---- */
-struct Tela;
+struct Tela;    // Declaração antecipada da estrutura 'Tela' (buffer de memória de pixels), utilizada pela janela gráfica nativa
 
-/* Que pedaço do Gantt mostrar e onde. Os campos de entrada são preenchidos
- * pela interface; `alt_conteudo` e `lbl` são devolvidos pelo desenho. */
+// Estrutura VistaGantt, que funciona como os parâmetros da "câmera" para desenhar o gráfico na tela
 typedef struct {
-    int x, y, w, h;      /* retângulo da tela reservado para o gráfico     */
-    int t_ini;           /* primeiro tick visível (rolagem horizontal)     */
-    int cw;              /* largura de um tick em pixels (zoom)            */
-    int y_rol;           /* rolagem vertical em pixels                     */
-    int sel;             /* tarefa destacada (índice), ou -1               */
-    int t_marca;         /* instante atual, marcado com uma linha; -1 = não */
-    int alt_conteudo;    /* (saída) altura total do desenho                */
-    int lbl;             /* (saída) largura da coluna dos rótulos          */
+    int x, y, w, h;      // Estrutura VistaGantt, que funciona como os parâmetros da "câmera" para desenhar o gráfico na tela
+    int t_ini;           // Define o primeiro tick visível no canto esquerdo, permitindo a rolagem horizontal no tempo
+    int cw;              // Define a largura em pixels de cada tick (coluna), permitindo o controle do nível de zoom
+    int y_rol;           // Deslocamento vertical em pixels para rolagem da lista de tarefas quando houver muitas tarefas no eixo Y
+    int sel;             // Guarda o índice da tarefa atualmente selecionada pelo usuário para destacar na tela (-1 para nenhuma)
+    int t_marca;         // Guarda o instante (tick) destacado com uma linha vertical para indicar o tempo atual (-1 para desativar)
+    int alt_conteudo;    // Campo de saída: armazena a altura total em pixels calculada do conteúdo para ajustar a barra de rolagem
+    int lbl;             // Campo de saída: armazena a largura calculada da coluna reservada aos rótulos/nomes das tarefas
 } VistaGantt;
 
-/* Desenha o Gantt dos ticks visíveis: tarefas (maior id em cima), eixo do
- * tempo e uma linha por CPU, com os mesmos símbolos do SVG. */
-void gantt_gfx(struct Tela *t, const Simulador *s, VistaGantt *v);
+void gantt_gfx(struct Tela *t, const Simulador *s, VistaGantt *v);    // Renderiza (desenha) as tarefas, o eixo temporal e a linha de cada CPU dentro do buffer de pixels da janela gráfica
 
-/* Índice da tarefa cuja linha está em (x, y), ou -1. */
-int gantt_gfx_tarefa_em(const Simulador *s, const VistaGantt *v, int x, int y);
+int gantt_gfx_tarefa_em(const Simulador *s, const VistaGantt *v, int x, int y);    // Calcula e retorna o índice da tarefa que está sob a posição do ponteiro do mouse (x, y)
 
-/* Legenda com todos os símbolos, quebrando linha para caber em `w`.
- * Devolve a altura usada. Com `desenhar` false só mede. */
-int gantt_gfx_legenda(struct Tela *t, int x, int y, int w, bool desenhar);
+int gantt_gfx_legenda(struct Tela *t, int x, int y, int w, bool desenhar);    // Desenha o espaço da legenda de ícones (chegada, prazo, sorteio, CPUs) no rodapé da janela
 
 #endif
