@@ -13,31 +13,31 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Alocação que aborta com mensagem clara em vez de devolver NULL: o simulador
- * não tem como continuar sem memória, e checar NULL em cada chamada só
- * espalharia código de erro pelo projeto. */
-void *xmalloc(size_t n);
+// Aloca 'n' bytes de memória com verificação automática (encerra o programa com erro claro se faltar memória)
+void *xmalloc(size_t n);  
+
+// Aloca 'n' elementos de tamanho 'tam' zerando a memória alocada, com verificação de falha
 void *xcalloc(size_t n, size_t tam);
+
+// Redimensiona o bloco de memória apontado por 'p' para 'n' bytes com verificação automática de falha
 void *xrealloc(void *p, size_t n);
+
+// Aloca memória e duplica a string 's' de forma segura (substitui a função não-padrão strdup)
 char *xstrdup(const char *s);
 
-/* Remove espaços/tabs/\r/\n do início e do fim, in-place. Devolve s. */
+// Remove espaços, tabulações e quebras de linha ('\\r', '\\n') do início e do fim da string 's'
 char *str_trim(char *s);
 
-/* Comparação sem diferenciar maiúsculas/minúsculas (requisito 3.3.2). */
+// Compara se duas strings 'a' e 'b' são iguais ignorando maiúsculas e minúsculas (case-insensitive)
 bool str_ieq(const char *a, const char *b);
 
-/* Converte texto em int de forma estrita: aceita sinal opcional e dígitos,
- * nada mais. Devolve 0 se ok, -1 se não é número, -2 se estoura o int. */
+// Converte a string 's' em inteiro em '*out' (retorna 0 se ok, -1 se inválido, -2 se estourar int)
 int parse_int(const char *s, int *out);
 
-/* Converte "RRGGBB", "#RRGGBB" ou "0xRRGGBB" em 0xRRGGBB. Devolve false se
- * não forem exatamente 6 dígitos hexadecimais. */
+// Converte string hexadecimal ("RRGGBB", "#RRGGBB" ou "0xRRGGBB") para um valor RGB em '*out'
 bool parse_cor(const char *s, unsigned *out);
 
-/* Lê uma linha do teclado mostrando um prompt. Devolve false em EOF
- * (ex.: Ctrl+D ou entrada redirecionada que acabou), para que o programa
- * possa encerrar sem travar. */
+// Exibe 'prompt' e lê uma linha do teclado em 'buf' (retorna false em EOF ou interrupção)
 bool ler_linha(const char *prompt, char *buf, size_t tam);
 
 /* --- Terminal ------------------------------------------------------------
@@ -45,25 +45,24 @@ bool ler_linha(const char *prompt, char *buf, size_t tam);
  * bibliotecas extras. Quando a saída não é um terminal (ex.: redirecionada
  * para arquivo nos testes) ou o usuário pede --sem-cor, as cores são
  * desligadas e a saída fica em texto puro. */
-extern bool g_usar_cores;
 
-void term_fg(unsigned rgb);          /* cor do texto */
-void term_bg(unsigned rgb);          /* cor de fundo */
-void term_reset(void);
-void term_negrito(void);
-void term_fraco(void);               /* texto esmaecido */
-void term_limpar(void);              /* limpa a tela (só com cores ligadas) */
-int  term_largura(void);             /* colunas do terminal (padrão 100) */
+extern bool g_usar_cores;  // Variável global booleana que habilita ou desabilita a emissão de códigos de cores ANSI no terminal
 
-/* Escolhe preto ou branco para o texto sobre um fundo rgb, pelo brilho
- * percebido, para que o número da CPU fique legível em qualquer cor. */
+void term_fg(unsigned rgb);         // Emite a sequência de escape ANSI para alterar a cor do texto/fonte no terminal usando cor RGB 24-bit
+void term_bg(unsigned rgb);         // Emite a sequência de escape ANSI para alterar a cor de fundo das células no terminal usando cor RGB 24-bit
+void term_reset(void);              // Emite a sequência de escape ANSI para restaurar as cores e estilos padrão do terminal
+void term_negrito(void);            // Emite a sequência de escape ANSI para ativar o estilo de texto em negrito no terminal
+void term_fraco(void);              // Emite a sequência de escape ANSI para ativar o estilo de texto esmaecido/suave no terminal
+void term_limpar(void);             // Emite a sequência de escape ANSI para limpar a tela do terminal (ativo apenas se g_usar_cores for true)
+int  term_largura(void);            // Retorna a quantidade de colunas da janela do terminal (padrão de 100 colunas)
+
+// Calcula a luminância da cor 'rgb' e retorna a cor de texto ideal (preto ou branco) para legibilidade no Gantt
 unsigned cor_contraste(unsigned rgb);
 
-/* --- Gerador pseudoaleatório ---------------------------------------------
- * Não usamos rand() porque o estado dele é global e escondido: não daria
- * para salvá-lo no snapshot. Com o estado explícito, voltar e avançar a
- * simulação sorteia sempre os mesmos valores (determinismo). */
+// Avança o estado de 64 bits do gerador aleatório pseudo-determinístico e retorna um número de 32 bits
 uint32_t rng_proximo(uint64_t *estado);
-int rng_intervalo(uint64_t *estado, int n);   /* inteiro em [0, n) */
+
+// Retorna um inteiro aleatório no intervalo [0, n-1] utilizando o estado explícito mantido no snapshot
+int rng_intervalo(uint64_t *estado, int n);  
 
 #endif
