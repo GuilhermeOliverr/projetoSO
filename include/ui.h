@@ -15,40 +15,39 @@
 #include <stddef.h>
 #include <stdint.h>
 
+// Início da definição da estrutura OpcoesUI que armazena as opções de execução da interface
 typedef struct {
-    const char *saida_svg;   /* NULL = nome derivado do arquivo de config */
-    bool texto;              /* imprime também a linha do tempo em texto   */
-    uint64_t semente;        /* semente do sorteio                         */
+    const char *saida_svg;   // Caminho do arquivo de saída SVG (se NULL, o nome é derivado automaticamente do arquivo de configuração)
+    bool texto;              // Flag booleana: se true, também imprime a linha do tempo e eventos em formato de texto no terminal
+    uint64_t semente;        // Valor da semente (seed) inicial para o gerador de números aleatórios no sorteio determinístico
 } OpcoesUI;
 
-/* Tabela com sistema, tarefas e utilização. */
+// Imprime na tela a tabela formatada com as configurações do sistema, tarefas e taxa de utilização calculada
 void ui_imprimir_config(const Config *cfg);
 
-/* Tela de configuração. Devolve false se o usuário quis sair. Pode trocar o
- * arquivo carregado (opção [l]). */
+// Exibe o menu interativo de configuração antes da simulação, permitindo editar parâmetros ou trocar o arquivo carregado
 bool ui_menu_config(Config *cfg);
 
-/* Pergunta o caminho do arquivo até carregar um válido. false = desistiu. */
+// Solicita interativamente ao usuário o caminho do arquivo de configuração até carregar um arquivo válido
 bool ui_pedir_arquivo(Config *cfg);
 
-/* Pergunta o modo: 'a' (passo a passo), 'b' (completo) ou 0 (sair). */
+// Pergunta ao usuário qual o modo de execução desejado: 'a' (passo a passo), 'b' (execução completa) ou 0 (sair)
 char ui_pedir_modo(void);
 
+// Executa o modo interativo passo a passo ("debugger"), permitindo avançar, retroceder e editar tarefas
 void ui_passo_a_passo(const Config *cfg, const OpcoesUI *op);
-/* Devolve o código de saída do programa (0 = ok). */
+// Executa a simulação inteira de forma contínua até o final e exporta o resultado (retorna 0 se OK)
 int ui_execucao_completa(const Config *cfg, const OpcoesUI *op);
 
-/* Nome do SVG de saída: o de --saida, ou "<nome do config>_gantt.svg". */
+// Constrói o caminho de saída do arquivo SVG em 'dst', usando op->saida_svg ou o nome base + "_gantt.svg"
 void ui_caminho_svg(const Config *cfg, const OpcoesUI *op, char *dst, size_t tam);
 
 /* ---- ui_gui.c: a mesma interface, numa janela gráfica ---- */
 
-/* Abre a janela. Devolve false com o motivo se não houver interface
- * gráfica (ex.: terminal sem servidor gráfico); aí usa-se o terminal. */
+// Tenta inicializar a janela gráfica nativa (retorna false com mensagem em 'erro' se não houver interface gráfica)
 bool ui_gui_iniciar(char *erro, int tam_erro);
 
-/* Roda o programa inteiro na janela: escolher arquivo (se `arquivo` for
- * NULL ou inválido), configurar, simular. Devolve o código de saída. */
+// Executa todo o fluxo do simulador (seleção de arquivo, menu de edição, simulação e Gantt) dentro da janela gráfica
 int ui_gui_executar(const char *arquivo, const OpcoesUI *op);
 
 #endif
