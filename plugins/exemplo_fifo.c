@@ -12,15 +12,15 @@
  */
 #include "sched.h"
 
-/* Prioridade nominal = instante de chegada da ativação (menor = antes). */
+// Função estática que calcula a prioridade nominal do FIFO: recebe a tarefa 'k' e o tick 'agora'
 static int prioridade_fifo(const TCB *k, int agora) {
-    (void)agora;
-    return k->chegada_atual;
+    (void)agora;    // Suprime o aviso do compilador de variável não utilizada (o FIFO simples não depende do tempo atual)
+    return k->chegada_atual;    // Retorna o instante de chegada da ativação atual (menor valor = chegou primeiro = maior prioridade)
 }
 
-/* O simulador procura exatamente este símbolo (SCHED_SIMBOLO_PLUGIN). */
+// Instancia a estrutura do plugin exportando a variável com o símbolo esperado pelo simulador
 const Escalonador escalonador_plugin = {
-    "FIFO",
-    "FIFO por chegada da ativação (plugin de exemplo)",
-    prioridade_fifo,
+    "FIFO",        // Nome/sigla do algoritmo lido do arquivo de configuração
+    "FIFO por chegada da ativação (plugin de exemplo)",        // Descrição legível da política do algoritmo mostrada na interface do usuário
+    prioridade_fifo,    // Ponteiro para a função 'prioridade_fifo' que calcula a prioridade nominal
 };
