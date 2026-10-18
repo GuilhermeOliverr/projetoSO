@@ -15,60 +15,49 @@
 /* Projeto A: toda tarefa periódica "termina" após 10 ativações (req. 4.4). */
 #define MAX_ATIVACOES 10
 
-/* Os 5 estados do ciclo de vida de uma tarefa (Maziero, cap. 4, seção 4.4). */
+// Início da enumeração dos estados do ciclo de vida de uma tarefa no sistema operacional
 typedef enum {
-    T_NOVA,        /* ainda não chegou ao sistema (antes do ingresso)          */
-    T_PRONTA,      /* tem ativação pendente e está na fila global de prontos    */
-    T_EXECUTANDO,  /* ocupando uma CPU neste tick                               */
-    T_SUSPENSA,    /* não pode executar: o motivo fica em TCB.motivo            */
-    T_TERMINADA    /* concluiu as 10 ativações                                  */
+    T_NOVA,        // Estado 0: Tarefa recém-criada/carregada que ainda não atingiu seu instante de primeiro ingresso
+    T_PRONTA,      // Estado 1: Tarefa liberada e aguardando na fila global de prontos por uma CPU disponível
+    T_EXECUTANDO,  // Estado 2: Tarefa alocada e em execução ativa em um dos processadores físicos do sistema
+    T_SUSPENSA,    // Estado 3: Tarefa bloqueada/suspensa (aguardando o próximo período ou suspensa manualmente pelo usuário)
+    T_TERMINADA    // Estado 4: Tarefa que concluiu definitivamente suas 10 ativações periódicas e encerrou sua execução
 } EstadoTarefa;
 
-/* Por que uma tarefa está SUSPENSA. O Maziero inclui em "suspensa" tanto a
- * espera por um recurso quanto a espera pelo tempo passar (sleep); aqui o
- * motivo decide como a tarefa sai da suspensão e como aparece no Gantt. */
+// Início da enumeração que especifica a razão/motivo da suspensão de uma tarefa
 typedef enum {
-    SUSP_NENHUM,   /* a tarefa não está suspensa                                */
-    SUSP_PERIODO,  /* ativação concluída, esperando o próximo período: volta
-                      sozinha para PRONTA quando a próxima ativação chega. No
-                      Gantt fica vazia, como nas figuras 2.5 e 2.6 do capítulo. */
-    SUSP_USUARIO   /* suspensa pelo usuário no passo a passo: só volta quando
-                      for retomada; chegadas não a tiram da suspensão. No Gantt
-                      aparece em preto pontilhado.                             */
+    SUSP_NENHUM,  // Motivo 0: A tarefa não está suspensa no momento
+    SUSP_PERIODO,  // Motivo 1: Ativação atual concluída, aguardando o início do próximo período (no Gantt aparece em branco/vazia)
+    SUSP_USUARIO   // Motivo 2: Suspensa manualmente pelo usuário no passo a passo (no Gantt aparece em preto pontilhado)
 } MotivoSuspensao;
 
+// Início da estrutura principal TCB (Task Control Block) que guarda todo o contexto da tarefa
 typedef struct {
+
     /* ---- definidos no arquivo de configuração ---- */
-    int id;
-    unsigned cor;              /* 0xRRGGBB                                       */
-    int ingresso;              /* instante da 1ª ativação                        */
-    int duracao;               /* C: ticks de CPU por ativação                   */
-    int periodo;               /* P: intervalo entre ativações                   */
-    int prazo;                 /* D: prazo relativo à chegada de cada ativação    */
-    const char *eventos_raw;   /* lista de eventos como veio do arquivo          */
-    const char *const *eventos;/* a mesma lista já separada, um item por evento.
-                                  Vetor dinâmico (sem limite de eventos por
-                                  tarefa), guardado sem interpretação.          */
-    int neventos;
+    int id;                    // Identificador único da tarefa (exemplo: 1, 2, 3...)
+    unsigned cor;              // Valor hexadecimal da cor RGB usada para renderizar a tarefa no Gráfico de Gantt
+    int ingresso;              // Instante de relógio (tick) em que a tarefa faz seu primeiro ingresso na simulação
+    int duracao;               // Quantidade de ticks de CPU necessários para completar cada ativação (C_i)
+    int periodo;               // Intervalo regular de tempo em ticks entre liberações consecutivas da tarefa (P_i)
+    int prazo;                 // Prazo relativo em ticks para conclusão de cada ativação (D_i)
+    const char *eventos_raw;   // Ponteiro para a string bruta contendo a lista de eventos associada à tarefa
+    const char *const *eventos;// Vetor dinâmico de ponteiros para as strings de eventos individuais sem interpretação
+    int neventos;              // Quantidade total de eventos armazenados no vetor de eventos
 
     /* ---- estado dinâmico ---- */
-    EstadoTarefa estado;
-    MotivoSuspensao motivo;    /* só vale quando estado == T_SUSPENSA         */
-    int liberadas;             /* ativações que já chegaram (0..10)              */
-    int concluidas;            /* ativações já terminadas (0..10)                */
-    int chegadas[MAX_ATIVACOES]; /* instante de chegada de cada ativação         */
-    int proxima_chegada;       /* quando chega a próxima ativação                */
-    int restante;              /* ticks que faltam na ativação atual (0 = nenhuma) */
-    int chegada_atual;         /* chegada da ativação em andamento               */
-    int deadline_abs;          /* chegada_atual + prazo                          */
-    unsigned perdas;           /* bit k ligado = ativação k já perdeu o prazo.
-                                  Um bit por ativação (e não um bool só da
-                                  atual) porque ativações acumuladas, que ainda
-                                  nem começaram, também podem vencer o prazo. */
-    int cpu;                   /* CPU usada no último tick (-1 = não executou).
-                                  Serve para o critério 1 de desempate e para
-                                  manter a tarefa na mesma CPU (afinidade).     */
-    int quantum_usado;         /* ticks seguidos desde que ganhou a CPU          */
+    EstadoTarefa estado;        // Estado atual de execução da tarefa no ciclo de vida do SO (T_PRONTA, T_EXECUTANDO, etc.)
+    MotivoSuspensao motivo;    // Razão da suspensão da tarefa quando estado == T_SUSPENSA (SUSP_PERIODO ou SUSP_USUARIO)
+    int liberadas;             // Contador da quantidade de ativações que já foram liberadas/chegaram no sistema
+    int concluidas;            // Contador da quantidade de ativações que já foram totalmente concluídas (máximo 10)
+    int chegadas[MAX_ATIVACOES]; // Vetor que registra o instante exato de relógio (tick) de chegada de cada uma das 10 ativações
+    int proxima_chegada;       // Instante do relógio global em que ocorrerá a liberação da próxima ativação
+    int restante;              // Quantidade de ticks de CPU que ainda faltam ser executados para concluir a ativação atual
+    int chegada_atual;         // Instante do relógio em que a ativação atualmente em andamento foi liberada
+    int deadline_abs;          // Instante limite absoluto do relógio para o término da ativação atual (chegada_atual + prazo)
+    unsigned perdas;           // Máscara/contador de bits indicando quais ativações estouraram o prazo
+    int cpu;                   // Índice do processador em que a tarefa está executando no tick atual (-1 se não estiver na CPU)
+    int quantum_usado;         // Quantidade de ticks contínuos que a tarefa já executou no quantum corrente
 
     /* ---- prioridade (menor valor = mais prioritária) ----
      * nominal: a que o algoritmo dá à tarefa (RM: período; EDF: deadline
@@ -76,21 +65,20 @@ typedef struct {
      * ativa:   a que o escalonador realmente compara (hoje é igual à
      *          nominal, mas ficam separadas para que a ativa possa mudar
      *          sem tocar na nominal). */
-    int prio_nominal;
-    int prio_ativa;
+    int prio_nominal;        // Prioridade nominal calculada pelo algoritmo de escalonamento (menor período no RM / menor deadline no EDF)
+    int prio_ativa;          // Prioridade efetiva usada na fila e no desempate do escalonador
 
     /* ---- estatísticas ---- */
-    int ticks_exec, ticks_espera, ticks_suspensa;
-    int deadlines_perdidos, preempcoes, sorteios;
-    int resposta_max, resposta_soma; /* tempo de resposta (fim - chegada)       */
-    int termino;               /* instante em que terminou a 10ª ativação, ou -1 */
+    int ticks_exec, ticks_espera, ticks_suspensa;    // Contadores acumulados de ticks em execução, aguardando na fila e suspensa
+    int deadlines_perdidos, preempcoes, sorteios;    // Estatísticas de total de perdas de prazos, preempções sofridas e vitórias em sorteios de desempate
+    int resposta_max, resposta_soma;     // Métricas de tempo de resposta: maior tempo registrado e soma acumulada para média
+    int termino;               // Instante de relógio em que a 10ª e última ativação foi concluída (-1 se ainda não terminou)
 } TCB;
 
-const char *estado_nome(EstadoTarefa e);
-/* Estado com o motivo, quando suspensa ("suspensa: próximo período"). */
-const char *estado_descricao(const TCB *k);
-/* Suspensa pelo usuário: a única suspensão que impede a tarefa de progredir
- * sozinha. */
-bool suspensa_pelo_usuario(const TCB *k);
+const char *estado_nome(EstadoTarefa e);    // Retorna uma string com o nome legível do estado da tarefa (exemplo: "PRONTA", "EXECUTANDO")
+
+const char *estado_descricao(const TCB *k);    // Retorna a descrição detalhada do estado incluindo o motivo da suspensão quando aplicável
+
+bool suspensa_pelo_usuario(const TCB *k);    // Retorna true se a tarefa foi suspensa manualmente pelo usuário (SUSP_USUARIO), impedindo que chegue a progredir sozinha
 
 #endif
