@@ -21,109 +21,93 @@
  * edições muito estranhas; a simulação normal sempre termina). */
 #define LIMITE_TICKS 2000000
 
+// Início da enumeração dos tipos de eventos monitorados durante a simulação
 typedef enum {
-    EV_CHEGADA,        /* nova ativação chegou                     */
-    EV_FIM_ATIVACAO,   /* ativação concluída                       */
-    EV_TERMINO,        /* 10ª ativação concluída: tarefa terminou  */
-    EV_PRAZO_PERDIDO,  /* ativação passou do deadline              */
-    EV_SORTEIO,        /* tarefa escolhida por sorteio (critério 5) */
-    EV_PREEMPCAO,      /* tarefa perdeu a CPU                      */
-    EV_FIM_QUANTUM,    /* quantum esgotado: escalonador reavaliou  */
-    EV_QTD
+    EV_CHEGADA,        // 0: Evento de liberação/chegada de uma nova ativação da tarefa (sinalizado com ↓)
+    EV_FIM_ATIVACAO,   // 1: Evento de término regular de uma ativação da tarefa (sinalizado com ↑)
+    EV_TERMINO,        // 2: Evento de conclusão definitiva das 10 ativações periódicas (sinalizado com ■)
+    EV_PRAZO_PERDIDO,  // 3: Evento de estouro do deadline relativo/absoluto (sinalizado com ✗ em vermelho)
+    EV_SORTEIO,        // 4: Evento de aplicação do critério 5 de desempate por sorteio determinístico (sinalizado com ?)
+    EV_PREEMPCAO,      // 5: Evento de preempção (tarefa é retirada da CPU para dar lugar a outra mais prioritária)
+    EV_FIM_QUANTUM,    // 6: Evento de esgotamento da fatia de tempo (quantum) da tarefa em execução
+    EV_QTD             // 7: Quantidade total de categorias de eventos definidas na enumeração
 } TipoEvento;
 
+// Início da estrutura que registra um evento ocorrido com seu contexto completo
 typedef struct {
-    int tick;          /* tick em que foi gerado (para descartar ao editar)  */
-    int instante;      /* momento exato do evento, desenhado no Gantt        */
-    TipoEvento tipo;
-    int tarefa;        /* índice da tarefa no vetor de TCBs                  */
-    int ativacao;      /* número da ativação (0..9)                          */
-    int cpu;           /* CPU envolvida, ou -1                               */
+    int tick;         // Tick do relógio em que o evento foi gerado (usado para descartar eventos ao editar a simulação)
+    int instante;      // Instante exato do evento para posicionamento correto dos marcadores gráficos no Gantt
+    TipoEvento tipo;    // Categoria do evento ocorrido (EV_CHEGADA, EV_PRAZO_PERDIDO, etc.)
+    int tarefa;        // Índice da tarefa associada ao evento dentro do vetor de TCBs
+    int ativacao;      // Número da ativação corrente da tarefa no momento do evento (de 0 a 9)
+    int cpu;          // Identificador da CPU envolvida na ocorrência do evento (-1 se ocorreu na fila de prontos)
 } Evento;
 
-/* O que o Gantt desenha numa célula (tarefa x tick). */
+// Enumeração dos estados visuais de uma célula da grade do Gantt (Vazio, Na Fila, Executando, Suspensa)
 typedef enum { G_VAZIO, G_PRONTA, G_EXEC, G_SUSPENSA } CelulaGantt;
 
-/* Estado completo do sistema num instante. É exatamente o que vai num
- * snapshot do histórico. */
+// Início da estrutura que armazena o estado instantâneo (Snapshot) do sistema a cada tick
 typedef struct {
-    int t;              /* relógio global                                */
-    int ncpus, quantum;
-    int alg;            /* índice no registro de escalonadores           */
-    uint64_t rng;       /* estado do sorteio: garante determinismo       */
-    int n;
-    TCB *tarefas;
-    bool fim;           /* todas as tarefas terminaram                   */
+    int t;     // Valor do relógio global do sistema no instante do snapshot 
+    int ncpus, quantum;     // Número de CPUs físicas ativas e valor do quantum de tempo configurados no tick 
+    int alg;     // Índice do algoritmo de escalonamento ativo no registro de escalonadores (ex: RM ou EDF) 
+    uint64_t rng;     // Estado interno de 64 bits do gerador de números aleatórios para manter o determinismo no sorteio 
+    int n;     // Quantidade total de tarefas existentes no sistema neste instante 
+    TCB *tarefas;     // Vetor contendo a cópia do estado de cada TCB no instante do snapshot 
+    bool fim;     // Booleana que indica se todas as tarefas completaram suas 10 ativações
 } Estado;
 
+// Início da estrutura principal que encapsula o simulador completo
 typedef struct {
-    Estado atual;
+    Estado atual;     // Estado instantâneo corrente da simulação no tick ativo (s->atual) 
+    bool historico;     // Booleana que habilita ou desabilita a gravação do histórico de snapshots para o debugger/undo 
+    Estado *snaps;     // Vetor dinâmico contendo a pilha de snapshots de todos os ticks passados (snaps[t]) 
+    int nsnaps, capsnaps;     // Quantidade atual de snapshots gravados e capacidade alocada de memória da pilha 
+    int largura;     // Quantidade de colunas (ticks) alocadas no buffer do rastro gráfico do Gantt 
+    unsigned char *cel;     // Matriz achatada 2D guardando o estado de cada célula (tarefa x tick) para o Gantt 
+    signed char *cpu;     // Matriz achatada 2D guardando qual CPU executou cada tarefa em cada tick (-1 se nenhuma) 
+    unsigned char *ncpus_col;     // Vetor guardando a quantidade de CPUs existentes em cada tick (suporta edições dinâmicas) 
+    int ncols, capcols;     // Quantidade de colunas (ticks) utilizadas e capacidade alocada das matrizes do rastro 
+    Evento *ev;     // Vetor dinâmico com o histórico de todos os eventos registrados durante a simulação 
+    int nev, capev;     // Quantidade atual de eventos armazenados e capacidade alocada do vetor de eventos 
 
-    /* Histórico (history.c): snaps[k] = estado no instante k. Só é mantido
-     * no modo passo a passo; na execução completa não há como voltar. */
-    bool historico;
-    Estado *snaps;
-    int nsnaps, capsnaps;
-
-    /* Rastro do Gantt: cel/cpu[tick * largura + tarefa]. Guardamos o
-     * rastro à parte dos snapshots para desenhar o gráfico sem reconstruir
-     * nada, e para que a execução completa não precise de snapshots. */
-    int largura;
-    unsigned char *cel;
-    signed char *cpu;
-    unsigned char *ncpus_col;   /* CPUs existentes em cada tick (podem ser
-                                   alteradas por edição durante a simulação) */
-    int ncols, capcols;
-
-    Evento *ev;
-    int nev, capev;
 } Simulador;
 
-const char *evento_nome(TipoEvento t);
+const char *evento_nome(TipoEvento t);    // Retorna o nome em texto descritivo do tipo de evento 't' (usado em logs e legendas)
 
-/* ---- sim.c ---- */
-void sim_iniciar(Simulador *s, const Config *cfg, bool historico, uint64_t semente);
-void sim_liberar(Simulador *s);
+void sim_iniciar(Simulador *s, const Config *cfg, bool historico, uint64_t semente);    // Inicializa o simulador 's' a partir das configurações 'cfg', aloca estruturas e grava o tick 0
+void sim_liberar(Simulador *s);    // Libera toda a memória dinâmica alocada pelo simulador (snapshots, eventos, rastro do Gantt)
 
-bool sim_avancar(Simulador *s);           /* false se a simulação já acabou   */
-bool sim_voltar(Simulador *s);            /* false se já está no instante 0   */
-int  sim_ir_para(Simulador *s, int t);    /* devolve o instante alcançado     */
+bool sim_avancar(Simulador *s);           // Avança a simulação em 1 tick do relógio, executando o escalonamento e salvando o snapshot
+bool sim_voltar(Simulador *s);            // Retrocede a simulação em 1 tick restaurando o snapshot do instante anterior (função Undo)
+int  sim_ir_para(Simulador *s, int t);    // Desloca o relógio da simulação diretamente para o tick 't' (avançando ou retrocedendo no histórico)
 
-/* Roda até o fim. Devolve NULL se terminou, ou o motivo de ter parado. */
-const char *sim_rodar_ate_fim(Simulador *s);
+const char *sim_rodar_ate_fim(Simulador *s);    // Executa a simulação continuamente em laço até que todas as tarefas terminem ou atinja o limite de ticks
 
-/* Nenhuma tarefa pode progredir (todas as restantes estão suspensas). */
-bool sim_bloqueado(const Estado *e);
+bool sim_bloqueado(const Estado *e);    // Verifica se o sistema está em deadlock ou bloqueado sem tarefas prontas executáveis
 
-/* Edição: chame preparar antes de alterar s->atual (descarta o futuro) e
- * concluir depois (grava o estado editado como snapshot do instante atual). */
-void sim_preparar_edicao(Simulador *s);
-void sim_concluir_edicao(Simulador *s);
+void sim_preparar_edicao(Simulador *s);    // Prepara o simulador para edições dinâmicas, preparando o histórico para possíveis truncamentos
+void sim_concluir_edicao(Simulador *s);    // Finaliza o processo de edição dinâmica e trunca o histórico futuro a partir do tick editado
 
-/* Acrescenta uma tarefa durante a simulação (chega a partir do ingresso). */
-void sim_adicionar_tarefa(Simulador *s, const TarefaCfg *t);
+void sim_adicionar_tarefa(Simulador *s, const TarefaCfg *t);    // Adiciona uma nova tarefa dinamicamente durante a execução da simulação
 
-/* Reinicia o TCB a partir dos dados de configuração. */
-void tcb_iniciar(TCB *k, const TarefaCfg *t);
+void tcb_iniciar(TCB *k, const TarefaCfg *t);    // Inicializa a estrutura TCB 'k' com os parâmetros da configuração 't' para o tick 0
 
-CelulaGantt sim_celula(const Simulador *s, int tick, int tarefa);
-int sim_cpu_celula(const Simulador *s, int tick, int tarefa);
+CelulaGantt sim_celula(const Simulador *s, int tick, int tarefa);    // Consulta e retorna o estado visual da célula (Vazio, Pronta, Executando, Suspensa) no Gantt
+int sim_cpu_celula(const Simulador *s, int tick, int tarefa);    // Consulta e retorna o índice da CPU em que a 'tarefa' executou no 'tick' (-1 se nenhuma)
 
-/* Índice da tarefa com esse id, ou -1. */
-int sim_indice(const Estado *e, int id);
+int sim_indice(const Estado *e, int id);    // Busca o índice da tarefa no vetor de TCBs a partir do seu 'id' único (retorna -1 se não encontrar)
 
-/* Utilização U = soma(C/P) e limite do teste de RM n(2^(1/n) - 1). */
-double sim_utilizacao(const Estado *e);
-double sim_limite_rm(int n);
+double sim_utilizacao(const Estado *e);    // Calcula a taxa de utilização total do processador U = soma(Duração / Período) para o conjunto de tarefas
+double sim_limite_rm(int n);    // Calcula o limite teórico de escalonabilidade do teste de Liu & Layland para RM: n*(2^(1/n) - 1)
 
-/* ---- history.c ---- */
-void estado_copiar(Estado *dst, const Estado *src);
-void estado_liberar(Estado *e);
-void hist_gravar(Simulador *s);              /* grava s->atual em snaps[t]   */
-void hist_truncar(Simulador *s, int t);      /* descarta tudo depois de t    */
-void hist_carregar(Simulador *s, int t);     /* s->atual = snaps[t]          */
-void rastro_garantir_coluna(Simulador *s, int tick);
-void rastro_ajustar_largura(Simulador *s, int largura);
-void evento_add(Simulador *s, int tick, int instante, TipoEvento tipo, int tarefa, int ativ, int cpu);
+void estado_copiar(Estado *dst, const Estado *src);    // Copia profundamente o estado 'src' para o estado 'dst' (alocando novos TCBs)
+void estado_liberar(Estado *e);    // Libera a memória alocada para os TCBs internos da estrutura Estado
+void hist_gravar(Simulador *s);              // Grava uma cópia do estado atual (s->atual) na pilha de histórico de snapshots (snaps[t])
+void hist_truncar(Simulador *s, int t);      // Descarta todos os snapshots do histórico posteriores ao tick 't' após uma edição
+void hist_carregar(Simulador *s, int t);     // Restaura o estado atual da simulação (s->atual) a partir do snapshot salvo em snaps[t]
+void rastro_garantir_coluna(Simulador *s, int tick);    // Garante que as matrizes do rastro do Gantt tenham memória alocada suficiente para o 'tick'
+void rastro_ajustar_largura(Simulador *s, int largura);    // Redimensiona a capacidade de colunas das matrizes do rastro do Gantt
+void evento_add(Simulador *s, int tick, int instante, TipoEvento tipo, int tarefa, int ativ, int cpu);    // Registra e adiciona um novo evento ao histórico da simulação
 
 #endif
