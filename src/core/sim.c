@@ -30,9 +30,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Nome legível de cada estado, usado nas telas. O `return "?"` no fim nunca
- * é alcançado com um enum válido; existe só para o compilador não reclamar
- * de "função sem retorno". */
+/* =========================================================================
+    \* 1\. GERENCIAMENTO DE EVENTOS E SNAPSHOTS DA SIMULAÇÃO \*
+========================================================================= \*/
+
+//Registra um evento ocorrido (chegada, fim de ativação, perda de prazo, sorteio ou fim de quantum) 
+//no vetor dinâmico de eventos da simulação. Dobra a capacidade do vetor se ele ficar cheio.
 const char *estado_nome(EstadoTarefa e) {
     switch (e) {
     case T_NOVA: return "nova (não chegou)";
@@ -80,7 +83,7 @@ const char *evento_nome(TipoEvento t) {
  * O memset zera TUDO primeiro (contadores, bits de perda, estatísticas), e
  * depois só preenchemos o que não é zero. */
 void tcb_iniciar(TCB *k, const TarefaCfg *t) {
-    memset(k, 0, sizeof *k);
+    memset(k, 0, sizeof *k); //zerar toda a memória da estrutura ou objeto apontado pelo ponteiro k
     k->id = t->id;
     k->cor = t->cor;
     k->ingresso = t->ingresso;
@@ -103,14 +106,12 @@ static bool todas_terminadas(const Estado *e) {
     return true;
 }
 
-/* Prepara o simulador no instante 0.
- *   historico: true no passo a passo (guarda um snapshot por tick para poder
- *              voltar); false na execução completa (não precisa voltar).
- *   semente:   inicia o gerador de números aleatórios do sorteio (critério 5).
- *              Mesma semente = mesmo resultado, o que torna a simulação
- *              reproduzível e os testes automáticos possíveis.
- * Se a semente for 0 usamos uma constante qualquer, porque o gerador
- * xorshift (util.c) travaria em 0. */
+/* ========================================================================= 
+    \* 2\. INICIALIZAÇÃO E VERIFICAÇÃO DO ESTADO DA SIMULAÇÃO \*
+========================================================================= \*/
+
+//Inicializa a estrutura do simulador no tick 0, carrega o algoritmo de escalonamento, 
+//aloca a matriz do Gráfico de Gantt e salva o primeiro snapshot de memória.
 void sim_iniciar(Simulador *s, const Config *cfg, bool historico, uint64_t semente) {
     memset(s, 0, sizeof *s);
     s->historico = historico;
