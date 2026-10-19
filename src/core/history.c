@@ -24,29 +24,33 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Copia um Estado inteiro (relógio, CPUs, gerador aleatório e TODOS os
- * TCBs). O truque é que o TCB não tem ponteiros para memória própria
- * (ver task.h), então copiar o vetor com memcpy já é uma cópia profunda
- * correta. Só o vetor `tarefas` precisa de memória própria em cada Estado. */
+/* ========================================================================= 
+    \* 1\. GERENCIAMENTO DE SNAPSHOTS (Fotografias da Memória por Tick) \*
+    ========================================================================= \*/
+
+
+//Realiza uma cópia profunda (deep copy) de uma estrutura de Estado 'src' para 'dst'.
+//Como o TCB não possui ponteiros internos dinâmicos próprios, um simples memcpy do 
+//vetor de TCBs é suficiente para clonar o estado inteiro com extrema eficiência.
 void estado_copiar(Estado *dst, const Estado *src) {
     TCB *buf = dst->tarefas;     /* guarda o vetor que o destino já tinha   */
     int cap_antiga = dst->n;
     *dst = *src;                  /* copia os campos simples (t, rng, ...)  */
     /* Reaproveita o vetor de destino se já tiver o tamanho certo. */
     if (cap_antiga != src->n || !buf) buf = xrealloc(buf, (size_t)(src->n ? src->n : 1) * sizeof(TCB));
-    if (src->n) memcpy(buf, src->tarefas, (size_t)src->n * sizeof(TCB));
+    if (src->n) memcpy(buf, src->tarefas, (size_t)src->n * sizeof(TCB));    // Clona o vetor de TCBs da origem para o destino usando memcpy()
     dst->tarefas = buf;           /* o `*dst = *src` tinha sobrescrito isto */
 }
 
+//Libera a memória dinâmica alocada para o vetor de TCBs contido dentro de uma estrutura Estado
 void estado_liberar(Estado *e) {
     free(e->tarefas);
     e->tarefas = NULL;
     e->n = 0;
 }
 
-/* Grava o estado atual como o snapshot do instante t. O vetor snaps cresce
- * dobrando de tamanho (256, 512, 1024...): assim o custo médio de cada
- * gravação é constante, em vez de recopiar o vetor a cada tick. */
+//Grava o estado atual da simulação (s->atual) na pilha de snapshots no índice 't'.
+//Expande a capacidade da pilha dobrando seu tamanho para manter o custo de gravação constante (O(1) amortizado).
 void hist_gravar(Simulador *s) {
     if (!s->historico) return;    /* modo completo: não guardamos nada      */
     int t = s->atual.t;
@@ -56,17 +60,19 @@ void hist_gravar(Simulador *s) {
         s->snaps = xrealloc(s->snaps, (size_t)nova * sizeof(Estado));
         /* A parte nova precisa vir zerada: estado_copiar espera que o
          * ponteiro `tarefas` antigo seja NULL ou válido, nunca lixo. */
-        memset(s->snaps + s->capsnaps, 0, (size_t)(nova - s->capsnaps) * sizeof(Estado));
+        memset(s->snaps + s->capsnaps, 0, (size_t)(nova - s->capsnaps) * sizeof(Estado));    // Zera a nova área alocada de memória usando memset()
         s->capsnaps = nova;
     }
-    estado_copiar(&s->snaps[t], &s->atual);
+    estado_copiar(&s->snaps[t], &s->atual);    // Clona o estado corrente no snapshot do tick 't' usando estado\_copiar()
     if (t + 1 > s->nsnaps) s->nsnaps = t + 1;
 }
 
-/* Descarta o "futuro" depois do instante t (usado antes de uma edição). */
+//Trunca o histórico da simulação a partir do instante 't' após uma edição dinâmica. 
+//Libera os snapshots futuros (ticks > t) e remove os eventos/colunas do Gantt gerados no futuro descartado.
 void hist_truncar(Simulador *s, int t) {
     if (s->historico) {
-        for (int k = t + 1; k < s->nsnaps; k++) estado_liberar(&s->snaps[k]);
+        for (int k = t + 1; k < s->nsnaps; k++) 
+            estado_liberar(&s->snaps[k]);    // Libera a memória de cada snapshot futuro usando estado\_liberar()
         if (s->nsnaps > t + 1) s->nsnaps = t + 1;
     }
     /* Colunas >= t e eventos gerados em ticks >= t pertencem ao futuro.
@@ -79,21 +85,23 @@ void hist_truncar(Simulador *s, int t) {
     s->nev = j;
 }
 
-/* Volta (ou avança) o estado atual para o snapshot guardado do instante t. */
+//Restaura o estado da simulação (s->atual) a partir do snapshot gravado no instante 't' (operação de Undo/Ir para).
 void hist_carregar(Simulador *s, int t) {
     estado_copiar(&s->atual, &s->snaps[t]);
 }
 
-/* Garante que existe espaço para a coluna do tick `tick` e a deixa "limpa"
- * (todas as células vazias, nenhuma CPU). O rastro é uma tabela com uma
- * linha por tick e uma coluna por tarefa, guardada num vetor 1D
- * (índice = tick * largura + tarefa). */
+/* ========================================================================= 
+    \* 2\. GERENCIAMENTO DO RASTRO GRÁFICO (Matrizes do Gantt) \* 
+    ========================================================================= \*/
+
+//Garante a alocação de espaço para a coluna correspondente ao 'tick' nas matrizes 
+//do Gráfico de Gantt e limpa as células (marcando como vazia e sem CPU alocada).
 void rastro_garantir_coluna(Simulador *s, int tick) {
     if (tick >= s->capcols) {
         int nova = s->capcols ? s->capcols * 2 : 256;
         while (nova <= tick) nova *= 2;
         size_t w = (size_t)(s->largura ? s->largura : 1);
-        s->cel = xrealloc(s->cel, (size_t)nova * w);
+        s->cel = xrealloc(s->cel, (size_t)nova * w);    // Redimensiona o vetor dinâmico de células usando xrealloc()
         s->cpu = xrealloc(s->cpu, (size_t)nova * w);
         s->ncpus_col = xrealloc(s->ncpus_col, (size_t)nova);
         s->capcols = nova;
@@ -107,10 +115,9 @@ void rastro_garantir_coluna(Simulador *s, int tick) {
     if (tick + 1 > s->ncols) s->ncols = tick + 1;
 }
 
-/* Quando o usuário adiciona uma tarefa, a tabela ganha uma coluna. Como o
- * layout é "tick * largura + tarefa", mudar a largura muda a posição de
- * TODAS as células: por isso reconstruímos a tabela inteira copiando linha
- * por linha. */
+//Reorganiza as matrizes 2D do rastro do Gantt quando uma nova tarefa é adicionada.
+//Como o layout da matriz é 'tick \* largura + tarefa', alterar a largura exige reestruturar 
+//e copiar o conteúdo linha por linha em novos blocos de memória.
 void rastro_ajustar_largura(Simulador *s, int largura) {
     if (largura <= s->largura) return;
     /* Refaz o layout: as colunas antigas ganham G_VAZIO para a tarefa nova
@@ -133,10 +140,11 @@ void rastro_ajustar_largura(Simulador *s, int largura) {
     s->largura = largura;
 }
 
-/* Acrescenta um evento à lista. `tick` é quando o simulador o gerou (usado
- * para descartar ao editar); `instante` é o momento exato a desenhar no
- * Gantt (req. 2.2: "no momento exato em que acontecem"). Para fim de
- * ativação, por exemplo, tick = t mas instante = t+1. */
+/* ========================================================================= 
+    \* 3\. REGISTRO DE EVENTOS \* 
+    ========================================================================= \*/
+
+//Adiciona um novo evento ocorrido (chegada, fim de ativação, perda de prazo, sorteio) ao vetor dinâmico de eventos da simulação.
 void evento_add(Simulador *s, int tick, int instante, TipoEvento tipo, int tarefa, int ativ, int cpu) {
     if (s->nev == s->capev) {
         s->capev = s->capev ? s->capev * 2 : 256;
