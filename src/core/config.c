@@ -32,7 +32,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ------------------------------------------------------------- mensagens */
+/* ========================================================================= 
+    \* 1\. GERENCIAMENTO DE MENSAGENS (AVISOS E ERROS) \*
+    ========================================================================= */
 
 /* Acrescenta uma mensagem formatada (como printf) à lista. A lista cresce
  * dobrando de capacidade (8, 16, 32...). `...` + va_list é como C recebe um
@@ -41,16 +43,17 @@
 void msg_add(ListaMsg *l, const char *fmt, ...) {
     char buf[1024];
     va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(buf, sizeof buf, fmt, ap);
-    va_end(ap);
+    va_start(ap, fmt);    // Inicializa a lista de argumentos variáveis 'ap' com o formato 'fmt'
+    vsnprintf(buf, sizeof buf, fmt, ap);    // Formata a string de acordo com 'fmt' e 'ap', salvando em 'buf'
+    va_end(ap);           // Finaliza o processamento da lista de argumentos variáveis 'ap'
     if (l->n == l->cap) {
-        l->cap = l->cap ? l->cap * 2 : 8;
-        l->itens = xrealloc(l->itens, (size_t)l->cap * sizeof *l->itens);
+        l->cap = l->cap ? l->cap * 2 : 8;    // Dobra a capacidade do vetor
+        l->itens = xrealloc(l->itens, (size_t)l->cap * sizeof *l->itens);    // redimensiona um bloco de memória alocado dinamicamente usando xrealloc()
     }
-    l->itens[l->n++] = xstrdup(buf);
+    l->itens[l->n++] = xstrdup(buf);    // Duplica e guarda a mensagem formatada
 }
 
+//Libera toda a memória dinâmica alocada para o vetor de mensagens e zera a estrutura ListaMsg.
 void msg_liberar(ListaMsg *l) {
     for (int i = 0; i < l->n; i++) free(l->itens[i]);
     free(l->itens);
@@ -58,28 +61,30 @@ void msg_liberar(ListaMsg *l) {
     l->n = l->cap = 0;
 }
 
-/* Mostra avisos em amarelo e erros em vermelho (cores ANSI de util.c). */
+//Imprime no terminal todas as mensagens acumuladas no parser: avisos em amarelo (0xF1C40F) e erros em vermelho (0xE74C3C).
 void config_imprimir_mensagens(const Config *cfg) {
     for (int i = 0; i < cfg->avisos.n; i++) {
-        term_fg(0xF1C40F);
+        term_fg(0xF1C40F);    // Define cor amarela para avisos
         printf("aviso: ");
-        term_reset();
+        term_reset();        // Restaura a cor e os estilos padrão do terminal usando term_reset()
         printf("%s\n", cfg->avisos.itens[i]);
     }
     for (int i = 0; i < cfg->erros.n; i++) {
-        term_fg(0xE74C3C);
+        term_fg(0xE74C3C);    // Define cor vermelha para erros
         printf("erro: ");
         term_reset();
         printf("%s\n", cfg->erros.itens[i]);
     }
 }
 
-/* --------------------------------------------------------------- básicos */
+/* ========================================================================= 
+    \* 2\. CONFIGURAÇÃO INICIAL E GERENCIAMENTO DE TAREFAS \* 
+    ========================================================================= */
 
-/* Cor sugerida para a tarefa de índice i quando o arquivo não informa. */
+//Retorna uma cor RGB no formato hexadecimal a partir de uma paleta padrão bem (separados, para que tarefas vizinhas no Gantt não se confundam) contrastada
+//para a i-ésima tarefa (usada quando o arquivo não especifica uma cor).
 unsigned config_cor_padrao(int i) {
-    /* Paleta com tons bem separados, para que tarefas vizinhas no Gantt não
-     * se confundam. Depois de 12 tarefas as cores se repetem com variação. */
+    // Depois de 12 tarefas as cores se repetem com variação.
     static const unsigned paleta[] = {
         0xE74C3C, 0x3498DB, 0x2ECC71, 0xF39C12, 0x9B59B6, 0x1ABC9C,
         0xE67E22, 0x34495E, 0xF1C40F, 0xE84393, 0x16A085, 0x8E44AD,
@@ -93,44 +98,40 @@ unsigned config_cor_padrao(int i) {
     return c;
 }
 
-/* Configuração inicial: valores padrão sugeridos (req. 3.2) e zero tarefas. */
+//Preenche a estrutura Config com os valores padrão sugeridos pelo sistema (RM como algoritmo, Quantum = 2, CPUs = 1) e sem nenhuma tarefa associada.
 void config_padrao(Config *cfg) {
-    memset(cfg, 0, sizeof *cfg);
-    cfg->algoritmo = sched_buscar(PADRAO_ALGORITMO);
+    memset(cfg, 0, sizeof *cfg);    // Zera todos os bytes da estrutura Config usando memset() ( preencher um bloco de memória com um determinado valor constante byte a byte)
+    cfg->algoritmo = sched_buscar(PADRAO_ALGORITMO);        // Busca o índice do algoritmo padrão ("RM") usando sched_buscar()
     cfg->quantum = PADRAO_QUANTUM;
     cfg->ncpus = PADRAO_CPUS;
 }
 
+//Libera toda a memória associada à estrutura Config, incluindo o vetor de tarefas, o caminho do arquivo e as listas de erros/avisos.
 void config_liberar(Config *cfg) {
-    for (int i = 0; i < cfg->n; i++) config_liberar_tarefa(&cfg->tarefas[i]);
+    for (int i = 0; i < cfg->n; i++) config_liberar_tarefa(&cfg->tarefas[i]);    // Libera a memória alocada para os eventos de cada tarefa usando config_liberar_tarefa()
     free(cfg->tarefas);
     free(cfg->caminho);
-    msg_liberar(&cfg->avisos);
-    msg_liberar(&cfg->erros);
+    msg_liberar(&cfg->avisos);    // Libera o vetor e textos da lista de avisos usando msg_liberar()
+    msg_liberar(&cfg->erros);    // Libera o vetor e textos da lista de erros usando msg_liberar()
     memset(cfg, 0, sizeof *cfg);
 }
 
-/* Acrescenta uma tarefa à configuração (vetor que dobra de tamanho). O
- * `*novo = *t` copia os campos simples; a seguir zeramos os ponteiros de
- * eventos e os refazemos com cópia própria, senão duas tarefas apontariam
- * para a mesma memória e uma liberação estragaria a outra. */
+//Adiciona uma nova tarefa ao vetor de tarefas da estrutura Config. Se o vetor estiver cheio, expande sua memória (dobrando a capacidade).
 void config_adicionar(Config *cfg, const TarefaCfg *t) {
     if (cfg->n == cfg->cap) {
         cfg->cap = cfg->cap ? cfg->cap * 2 : 8;
-        cfg->tarefas = xrealloc(cfg->tarefas, (size_t)cfg->cap * sizeof *cfg->tarefas);
+        cfg->tarefas = xrealloc(cfg->tarefas, (size_t)cfg->cap * sizeof *cfg->tarefas);    // Dobra a capacidade do vetor dinâmico de tarefas usando xrealloc()
     }
     TarefaCfg *novo = &cfg->tarefas[cfg->n];
     *novo = *t;
     novo->eventos = NULL;
     novo->lista_ev = NULL;
     novo->nev = 0;
-    config_definir_eventos(novo, t->eventos ? t->eventos : "");
+    config_definir_eventos(novo, t->eventos ? t->eventos : "");    // Copia e separa os eventos da tarefa de forma independente usando config_definir_eventos()
     cfg->n++;
 }
 
-/* Libera a memória que a tarefa possui: cada item da lista, o vetor e o
- * texto cru. Zera os ponteiros para a função poder ser chamada duas vezes
- * sem liberar em duplicidade. */
+//Libera a memória dinâmica alocada para uma tarefa específica (string de eventos e vetor de itens).
 void config_liberar_tarefa(TarefaCfg *t) {
     for (int i = 0; i < t->nev; i++) free(t->lista_ev[i]);
     free(t->lista_ev);
@@ -140,18 +141,14 @@ void config_liberar_tarefa(TarefaCfg *t) {
     t->nev = 0;
 }
 
-/* Guarda o texto de lista_eventos e o separa em itens. O formato dos
- * eventos não é definido, então NÃO interpretamos nem rejeitamos nada: só
- * guardamos cada pedaço (requisito 3.3.5: podem existir "inúmeros eventos",
- * por isso o vetor é dinâmico, sem limite). */
+//Pega a string de eventos da tarefa e a separa por vírgulas ou pontos e vírgulas, armazenando cada evento individualmente no vetor dinâmico `lista_ev`.
 void config_definir_eventos(TarefaCfg *t, const char *texto) {
-    /* Copia antes de liberar: `texto` pode ser o próprio t->eventos. */
-    char *raw = xstrdup(texto ? texto : "");
-    config_liberar_tarefa(t);
+    char *raw = xstrdup(texto ? texto : "");    // Cria uma cópia dinâmica da string de eventos usando xstrdup()
+    config_liberar_tarefa(t);    // Libera a lista de eventos anterior antes de sobrescrever usando config_liberar_tarefa()
     t->eventos = raw;
     /* Aceitamos ',' e ';' como separadores porque o formato dos eventos
      * não é definido; itens vazios (ex.: ";;") são ignorados. */
-    char *copia = xstrdup(raw);
+    char *copia = xstrdup(raw);    // Duplica a string de eventos usando xstrdup() para podermos modificá-la na separação
     int cap = 0;
     /* strpbrk acha o próximo separador; trocamos por '\0' para isolar o
      * item, que é limpo com str_trim e guardado se não for vazio. */
@@ -171,21 +168,26 @@ void config_definir_eventos(TarefaCfg *t, const char *texto) {
     free(copia);
 }
 
-/* Validações compartilhadas entre o arquivo e as telas de edição: devolvem
- * NULL se o valor serve, ou o motivo da recusa. Assim a regra e a mensagem
- * existem num lugar só. */
+/* ========================================================================= 
+    \* 3\. VALIDADORES DE PARÂMETROS \* 
+    ========================================================================= */
+
+//Valida se o valor do quantum é maior que zero. Retorna NULL se for válido ou a mensagem de erro caso seja inválido.
 const char *config_validar_quantum(int v) {
     return v > 0 ? NULL : "o quantum deve ser maior que zero";
 }
 
+//Valida se a quantidade de CPUs está entre 1 e o limite máximo (MAX\_CPUS = 64).
 const char *config_validar_cpus(int v) {
     static char buf[96];   /* static: o texto precisa viver após o return */
     if (v >= 1 && v <= MAX_CPUS) return NULL;
-    snprintf(buf, sizeof buf, "a quantidade de CPUs deve estar entre 1 e %d", MAX_CPUS);
+    snprintf(buf, sizeof buf, "a quantidade de CPUs deve estar entre 1 e %d", MAX_CPUS);    // Formata a mensagem de erro no buffer estático usando snprintf() return buf;
     return buf;
 }
 
-/* ---------------------------------------------------------------- parser */
+/* =========================================================================
+    \* 4\. PARSER DE LINHAS E CAMPOS DO ARQUIVO DE CONFIGURAÇÃO \*
+========================================================================= */
 
 /* Contexto de uma linha, para montar mensagens "arquivo:linha: campo ...". */
 typedef struct {
@@ -196,14 +198,7 @@ typedef struct {
 
 #define MAX_CAMPOS 8
 
-/* Divide `s` (modificado in-place) em até `max` campos separados por ';'.
- * Se `resto` != NULL, o último campo recebe todo o restante da linha (usado
- * para lista_eventos, que pode ter qualquer formato). Um ';'
- * final não cria campo extra (req. 3.3.3).
- *
- * Como funciona: cada ';' é trocado por '\0' (fim de string do C), e
- * guardamos o endereço do início de cada pedaço em campos[]. Ex.:
- *   "1;E74C3C;0;20;100;100;"  ->  campos[0]="1", campos[1]="E74C3C", ... */
+//Divide uma linha de texto em até `max` campos separados por ponto e vírgula (';'). Altera a string original inserindo '\0' nos delimitadores.
 static int dividir(char *s, char **campos, int max, bool resto) {
     size_t len = strlen(s);
     if (len && s[len - 1] == ';') s[--len] = '\0';   /* ';' final opcional */
@@ -212,23 +207,22 @@ static int dividir(char *s, char **campos, int max, bool resto) {
     while (n < max) {
         campos[n++] = p;
         if (resto && n == max) break;   /* o último campo leva o resto todo */
-        char *q = strchr(p, ';');
+        char *q = strchr(p, ';');    // Localiza a posição do próximo ponto e vírgula na linha usando strchr()
         if (!q) break;
         *q = '\0';
         p = q + 1;
     }
-    for (int i = 0; i < n; i++) str_trim(campos[i]);
+    for (int i = 0; i < n; i++) str_trim(campos[i]);    // Remove espaços extras das pontas de cada campo usando str_trim()
     return n;
 }
 
-/* Lê um campo inteiro. Campo vazio usa `padrao` (se padrao_ok) com aviso.
- * Devolve false (e registra o erro) se inválido. */
+//Converte um texto de um campo em um número inteiro. Trata campos vazios usando valores padrão (se permitido) ou gerando erros apropriados.
 static bool campo_int(Ctx *c, const char *nome, const char *txt, int *out,
                       bool padrao_ok, int padrao) {
     if (!*txt) {
         if (padrao_ok) {
             *out = padrao;
-            msg_add(&c->cfg->avisos, "%s:%d: campo '%s' vazio; usando o valor padrão %d",
+            msg_add(&c->cfg->avisos, "%s:%d: campo '%s' vazio; usando o valor padrão %d",    // Registra aviso de campo em branco usando msg_add()
                     c->arq, c->linha, nome, padrao);
             return true;
         }
@@ -249,54 +243,51 @@ static bool campo_int(Ctx *c, const char *nome, const char *txt, int *out,
     return true;
 }
 
-/* Registra um erro de valor fora do permitido (o número foi lido, mas não
- * faz sentido: ex. duração <= 0). */
+//Registra um erro de validação para um campo cujo valor numérico está fora da faixa permitida.
 static void erro_campo(Ctx *c, const char *nome, int v, const char *motivo) {
     msg_add(&c->cfg->erros, "%s:%d: campo '%s' = %d: %s", c->arq, c->linha, nome, v, motivo);
 }
 
-/* 1ª linha útil do arquivo: algoritmo_escalonamento;quantum;qtde_cpus.
- * Campos ausentes ou vazios usam o padrão (com aviso); valores inválidos
- * viram erro. */
+//Faz o parsing da 1ª linha útil do arquivo (configuração do sistema). Formato: `algoritmo_escalonamento; quantum; qtde_cpus´.
 static void ler_linha_sistema(Ctx *c, char *s) {
     Config *cfg = c->cfg;
     char *f[MAX_CAMPOS];
-    int n = dividir(s, f, MAX_CAMPOS, false);
+    int n = dividir(s, f, MAX_CAMPOS, false);    // Divide a linha do sistema nos seus campos delimitados por ';' usando dividir()
 
-    /* algoritmo */
+    // 1\. Processa o algoritmo de escalonamento
     if (!*f[0]) {
         msg_add(&cfg->avisos, "%s:%d: campo 'algoritmo_escalonamento' vazio; usando o padrão %s",
                 c->arq, c->linha, PADRAO_ALGORITMO);
-        cfg->algoritmo = sched_buscar(PADRAO_ALGORITMO);
+        cfg->algoritmo = sched_buscar(PADRAO_ALGORITMO);    // Busca o índice do algoritmo padrão ("RM") usando sched_buscar()
     } else {
         cfg->algoritmo = sched_buscar(f[0]);
         if (cfg->algoritmo < 0) {
             char nomes[256];
-            sched_listar_nomes(nomes, sizeof nomes);
+            sched_listar_nomes(nomes, sizeof nomes);    // Obtém a lista textual dos algoritmos registrados usando sched_listar_nomes()
             msg_add(&cfg->erros,
                     "%s:%d: campo 'algoritmo_escalonamento' = '%s': algoritmo desconhecido "
                     "(disponíveis: %s)", c->arq, c->linha, f[0], nomes);
         }
     }
 
-    /* quantum */
+    // 2. Processa o quantum
     if (n < 2) {
         msg_add(&cfg->avisos, "%s:%d: campo 'quantum' ausente; usando o padrão %d",
                 c->arq, c->linha, PADRAO_QUANTUM);
         cfg->quantum = PADRAO_QUANTUM;
     } else if (campo_int(c, "quantum", f[1], &cfg->quantum, true, PADRAO_QUANTUM)) {
-        const char *e = config_validar_quantum(cfg->quantum);
-        if (e) erro_campo(c, "quantum", cfg->quantum, e);
+        const char *e = config_validar_quantum(cfg->quantum);    // Valida se o quantum é positivo usando config_validar_quantum()
+        if (e) erro_campo(c, "quantum", cfg->quantum, e);    // Registra o erro de validação do quantum usando erro_campo()
     }
 
-    /* qtde_cpus */
+    // 3. Processa a quantidade de CPUs
     if (n < 3) {
         msg_add(&cfg->avisos, "%s:%d: campo 'qtde_cpus' ausente; usando o padrão %d",
                 c->arq, c->linha, PADRAO_CPUS);
         cfg->ncpus = PADRAO_CPUS;
     } else if (campo_int(c, "qtde_cpus", f[2], &cfg->ncpus, true, PADRAO_CPUS)) {
-        const char *e = config_validar_cpus(cfg->ncpus);
-        if (e) erro_campo(c, "qtde_cpus", cfg->ncpus, e);
+        const char *e = config_validar_cpus(cfg->ncpus);    
+        if (e) erro_campo(c, "qtde_cpus", cfg->ncpus, e);    
     }
 
     if (n > 3)
@@ -304,16 +295,11 @@ static void ler_linha_sistema(Ctx *c, char *s) {
                 "foram ignorados", c->arq, c->linha, n);
 }
 
-/* Linhas de tarefa: id;cor;ingresso;duracao;periodo;prazo;lista_eventos.
- * A variável `ok` vai ficando false a cada problema, mas continuamos
- * lendo os outros campos para reportar todos os erros da linha de uma vez.
- *
- * `ids`/`linhas_id` guardam todos os ids vistos (inclusive de aperiódicas),
- * para detectar repetição. */
+//Faz o parsing das linhas de definição de tarefas (a partir da 2ª linha útil). Formato: `id; cor; ingresso; duracao; periodo; prazo; lista_eventos`.
 static void ler_linha_tarefa(Ctx *c, char *s, int **ids, int **linhas_id, int *nids, int *capids) {
     Config *cfg = c->cfg;
     char *f[7];
-    int n = dividir(s, f, 7, true);
+    int n = dividir(s, f, 7, true);    // Divide a linha da tarefa em até 7 campos usando dividir()
     if (n < 5) {
         msg_add(&cfg->erros, "%s:%d: a linha tem %d campo(s), mas uma tarefa precisa de "
                 "id;cor;ingresso;duracao;periodo;prazo[;lista_eventos]", c->arq, c->linha, n);
@@ -324,7 +310,7 @@ static void ler_linha_tarefa(Ctx *c, char *s, int **ids, int **linhas_id, int *n
     t.linha = c->linha;
     bool ok = true;
 
-    /* id: obrigatório, inteiro e único no arquivo. */
+    // 1. Validação do ID e checagem de repetição
     if (campo_int(c, "id", f[0], &t.id, false, 0)) {
         for (int i = 0; i < *nids; i++) {
             if ((*ids)[i] == t.id) {
@@ -336,8 +322,8 @@ static void ler_linha_tarefa(Ctx *c, char *s, int **ids, int **linhas_id, int *n
         }
         if (*nids == *capids) {
             *capids = *capids ? *capids * 2 : 16;
-            *ids = xrealloc(*ids, (size_t)*capids * sizeof **ids);
-            *linhas_id = xrealloc(*linhas_id, (size_t)*capids * sizeof **linhas_id);
+            *ids = xrealloc(*ids, (size_t)*capids * sizeof **ids);    // Redimensiona o vetor de verificação de IDs usando xrealloc()
+            *linhas_id = xrealloc(*linhas_id, (size_t)*capids * sizeof **linhas_id);    // Redimensiona o vetor de mapeamento de linhas usando xrealloc()
         }
         (*ids)[*nids] = t.id;
         (*linhas_id)[*nids] = c->linha;
@@ -346,18 +332,18 @@ static void ler_linha_tarefa(Ctx *c, char *s, int **ids, int **linhas_id, int *n
         ok = false;
     }
 
-    /* cor: vazia = cor padrão (aviso); inválida = erro. */
+    // 2. Validação da cor hexadecimal RGB
     if (!*f[1]) {
         t.cor = config_cor_padrao(cfg->n);
         msg_add(&cfg->avisos, "%s:%d: campo 'cor' vazio; usando a cor padrão %06X",
                 c->arq, c->linha, t.cor);
-    } else if (!parse_cor(f[1], &t.cor)) {
+    } else if (!parse_cor(f[1], &t.cor)) {    // Converte a string hexadecimal RGB para inteiro de 24 bits usando parse_cor()
         msg_add(&cfg->erros, "%s:%d: campo 'cor' = '%s': esperado RGB hexadecimal com 6 dígitos "
                 "(ex.: F0E0D0)", c->arq, c->linha, f[1]);
         ok = false;
     }
 
-    /* ingresso: >= 0 (padrão 0). */
+    // 3. Validação do tempo de ingresso (>= 0)
     if (campo_int(c, "ingresso", f[2], &t.ingresso, true, PADRAO_INGRESSO)) {
         if (t.ingresso < 0) {
             erro_campo(c, "ingresso", t.ingresso, "o instante de ingresso não pode ser negativo");
@@ -365,7 +351,7 @@ static void ler_linha_tarefa(Ctx *c, char *s, int **ids, int **linhas_id, int *n
         }
     } else ok = false;
 
-    /* duracao: obrigatória e > 0 (tarefa sem trabalho não faz sentido). */
+    // 4. Validação da duração (> 0)
     if (campo_int(c, "duracao", f[3], &t.duracao, false, 0)) {
         if (t.duracao <= 0) {
             erro_campo(c, "duracao", t.duracao, "a duração deve ser maior que zero");
@@ -373,8 +359,7 @@ static void ler_linha_tarefa(Ctx *c, char *s, int **ids, int **linhas_id, int *n
         }
     } else ok = false;
 
-    /* periodo: > 0 periódica; 0 aperiódica (ignorada abaixo); < 0 é erro
-     * (req. 3.3: "valores menores que zero representam erros"). */
+    // 5. Validação do período (>= 0; 0 indica aperiódica)
     if (campo_int(c, "periodo", f[4], &t.periodo, false, 0)) {
         if (t.periodo < 0) {
             erro_campo(c, "periodo", t.periodo, "valor negativo não é permitido "
@@ -383,8 +368,7 @@ static void ler_linha_tarefa(Ctx *c, char *s, int **ids, int **linhas_id, int *n
         }
     } else ok = false;
 
-    /* prazo: ausente ou vazio = igual ao período ("prazo implícito", como
-     * no capítulo 2); caso contrário precisa ser > 0. */
+    // 6. Validação do prazo (se omitido, assume prazo = período)
     if (n < 6) {
         t.prazo = t.periodo;
         msg_add(&cfg->avisos, "%s:%d: campo 'prazo' ausente; usando o período (%d) como prazo",
@@ -404,8 +388,7 @@ static void ler_linha_tarefa(Ctx *c, char *s, int **ids, int **linhas_id, int *n
 
     if (!ok) return;   /* algum campo inválido: a tarefa não entra */
 
-    /* Aperiódica: válida no arquivo, mas o Projeto A não a simula (req.
-     * 4.4). Ignoramos e AVISAMOS o usuário claramente. */
+    // Descarte de tarefas aperiódicas
     if (t.periodo == 0) {
         msg_add(&cfg->avisos, "%s:%d: tarefa %d é aperiódica (periodo = 0) e foi ignorada: "
                 "o Projeto A só simula tarefas periódicas", c->arq, c->linha, t.id);
@@ -421,8 +404,8 @@ static void ler_linha_tarefa(Ctx *c, char *s, int **ids, int **linhas_id, int *n
                     "no Gantt elas ficarão iguais", c->arq, c->linha, t.id, t.cor,
                     cfg->tarefas[i].id);
     config_adicionar(cfg, &t);
-    /* Req. 3.3.5: a lista de eventos é lida e guardada no TCB, mas não muda
-     * a simulação; o aviso mostra que o campo foi lido (e não ignorado por
+    
+     /* a simulação; o aviso mostra que o campo foi lido (e não ignorado por
      * engano). */
     const TarefaCfg *nova = &cfg->tarefas[cfg->n - 1];
     if (nova->nev > 0)
@@ -431,11 +414,13 @@ static void ler_linha_tarefa(Ctx *c, char *s, int **ids, int **linhas_id, int *n
                 strlen(nova->eventos) > 60 ? "..." : "");
 }
 
-/* Lê o arquivo inteiro para a memória. Devolve NULL e registra o erro.
- * Abrimos em modo binário ("rb") para que o fim de linha chegue sem
- * conversão e tratemos \r\n nós mesmos, igual em qualquer sistema. */
+/* ========================================================================= 
+    \* 5\. LEITURA DE ARQUIVO E ENTRADA PRINCIPAL DO PARSER \*
+    ========================================================================= */
+
+//Abre o arquivo em modo binário ("rb"), lê todo o seu conteúdo para um buffer em memória RAM dinamicamente redimensionado e insere o caractere nulo '\0' no final.
 static char *ler_arquivo(Config *cfg, const char *caminho) {
-    FILE *f = fopen(caminho, "rb");
+    FILE *f = fopen(caminho, "rb");    // Abre o arquivo de configuração para leitura em modo binário usando fopen()
     if (!f) {
         msg_add(&cfg->erros, "não foi possível abrir '%s': %s", caminho, strerror(errno));
         return NULL;
@@ -446,7 +431,7 @@ static char *ler_arquivo(Config *cfg, const char *caminho) {
     char *buf = xmalloc(cap);
     for (;;) {
         if (n + 1 >= cap) buf = xrealloc(buf, cap *= 2);
-        size_t r = fread(buf + n, 1, cap - n - 1, f);
+        size_t r = fread(buf + n, 1, cap - n - 1, f);    // Lê um bloco de bytes do arquivo diretamente para o buffer usando fread()
         n += r;
         if (r == 0) break;
     }
@@ -469,9 +454,10 @@ static char *ler_arquivo(Config *cfg, const char *caminho) {
     return buf;
 }
 
-/* Função pública: carrega e valida o arquivo. Devolve true se não houve
- * ERROS (avisos são permitidos). Etapas: ler o texto, pular o BOM, percorrer
- * linha por linha, e por fim as checagens do arquivo como um todo. */
+/*É a função principal do módulo. Carrega o arquivo de configuração, descarta 
+\* a marcação BOM de arquivos UTF-8 do Windows, percorre o arquivo linha por linha, 
+\* chama o parser da linha do sistema e das tarefas e verifica os erros fatais. 
+\* Retorna true se o arquivo foi carregado sem erros fatais. */
 bool config_carregar(const char *caminho, Config *cfg) {
     config_padrao(cfg);
     cfg->caminho = xstrdup(caminho);
