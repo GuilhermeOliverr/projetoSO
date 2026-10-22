@@ -70,7 +70,7 @@ bool gfx_abrir(const char *titulo, int w, int h, int *w_real, int *h_real, char 
 // Transfere o buffer de pixels 0x00RRGGBB da memória RAM para ser renderizado dentro da janela gráfica
 void gfx_mostrar(const uint32_t *pix, int w, int h);
 
-// Processa a fila de mensagens do SO e aguarda por um evento de entrada por até 'timeout\_ms' milissegundos
+// Processa a fila de mensagens do SO e aguarda por um evento de entrada por até 'timeout_ms' milissegundos
 bool gfx_esperar(GfxEvento *ev, int timeout_ms);
 
 // Destrói a janela gráfica nativa e libera todos os recursos gráficos alocados no SO
@@ -78,7 +78,7 @@ void gfx_fechar(void);
 
 // Estrutura para descrever unidades de disco do sistema (utilizada no navegador de arquivos)
 typedef struct {
-    char raiz[4];     // String contendo a letra da unidade de disco (exemplo: "C:", "D:", "E:")                      */
+    char raiz[4];     // String contendo a letra da unidade de disco (exemplo: "C:", "D:", "E:")
     char tipo[32];    // String descrevendo a categoria da unidade (exemplo: "disco local", "pendrive")
 } GfxUnidade;
 

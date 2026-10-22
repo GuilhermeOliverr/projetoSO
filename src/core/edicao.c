@@ -5,9 +5,9 @@
 
 #include <stdio.h>
 
-/* ========================================================================= 
-    \* 1\. FUNÇÕES DE VALIDAÇÃO (Regras para aceitar ou recusar edições) \*
-========================================================================= */
+/* =========================================================================
+ * 1. FUNÇÕES DE VALIDAÇÃO (Regras para aceitar ou recusar edições)
+ * ========================================================================= */
 
 //Valida se um número inteiro 'v' é estritamente positivo (> 0). 
 //É usada para verificar campos como duração e prazo relativo da tarefa. 
@@ -47,9 +47,9 @@ const char *valida_id(int v, const int *ids, int n, int proprio) {
     return NULL;
 }
 
-/* ========================================================================= 
- \* 2\. FUNÇÕES DE APLICAÇÃO DE EDIÇÃO (Alteram o TCB e recalculam dependências) \*
-========================================================================= */
+/* =========================================================================
+ * 2. FUNÇÕES DE APLICAÇÃO DE EDIÇÃO (Alteram o TCB e recalculam dependências)
+ * ========================================================================= */
 
 //Aplica um novo valor de período 'v' na tarefa 'k' e recalcula o instante exato 
 //em que a próxima ativação da tarefa deve ser liberada na simulação.

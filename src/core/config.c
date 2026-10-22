@@ -32,9 +32,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ========================================================================= 
-    \* 1\. GERENCIAMENTO DE MENSAGENS (AVISOS E ERROS) \*
-    ========================================================================= */
+/* =========================================================================
+ * 1. GERENCIAMENTO DE MENSAGENS (AVISOS E ERROS)
+ * ========================================================================= */
 
 /* Acrescenta uma mensagem formatada (como printf) à lista. A lista cresce
  * dobrando de capacidade (8, 16, 32...). `...` + va_list é como C recebe um
@@ -77,9 +77,9 @@ void config_imprimir_mensagens(const Config *cfg) {
     }
 }
 
-/* ========================================================================= 
-    \* 2\. CONFIGURAÇÃO INICIAL E GERENCIAMENTO DE TAREFAS \* 
-    ========================================================================= */
+/* =========================================================================
+ * 2. CONFIGURAÇÃO INICIAL E GERENCIAMENTO DE TAREFAS
+ * ========================================================================= */
 
 //Retorna uma cor RGB no formato hexadecimal a partir de uma paleta padrão bem (separados, para que tarefas vizinhas no Gantt não se confundam) contrastada
 //para a i-ésima tarefa (usada quando o arquivo não especifica uma cor).
@@ -168,16 +168,16 @@ void config_definir_eventos(TarefaCfg *t, const char *texto) {
     free(copia);
 }
 
-/* ========================================================================= 
-    \* 3\. VALIDADORES DE PARÂMETROS \* 
-    ========================================================================= */
+/* =========================================================================
+ * 3. VALIDADORES DE PARÂMETROS
+ * ========================================================================= */
 
 //Valida se o valor do quantum é maior que zero. Retorna NULL se for válido ou a mensagem de erro caso seja inválido.
 const char *config_validar_quantum(int v) {
     return v > 0 ? NULL : "o quantum deve ser maior que zero";
 }
 
-//Valida se a quantidade de CPUs está entre 1 e o limite máximo (MAX\_CPUS = 64).
+//Valida se a quantidade de CPUs está entre 1 e o limite máximo (MAX_CPUS = 64).
 const char *config_validar_cpus(int v) {
     static char buf[96];   /* static: o texto precisa viver após o return */
     if (v >= 1 && v <= MAX_CPUS) return NULL;
@@ -186,8 +186,8 @@ const char *config_validar_cpus(int v) {
 }
 
 /* =========================================================================
-    \* 4\. PARSER DE LINHAS E CAMPOS DO ARQUIVO DE CONFIGURAÇÃO \*
-========================================================================= */
+ * 4. PARSER DE LINHAS E CAMPOS DO ARQUIVO DE CONFIGURAÇÃO
+ * ========================================================================= */
 
 /* Contexto de uma linha, para montar mensagens "arquivo:linha: campo ...". */
 typedef struct {
@@ -254,7 +254,7 @@ static void ler_linha_sistema(Ctx *c, char *s) {
     char *f[MAX_CAMPOS];
     int n = dividir(s, f, MAX_CAMPOS, false);    // Divide a linha do sistema nos seus campos delimitados por ';' usando dividir()
 
-    // 1\. Processa o algoritmo de escalonamento
+    // 1. Processa o algoritmo de escalonamento
     if (!*f[0]) {
         msg_add(&cfg->avisos, "%s:%d: campo 'algoritmo_escalonamento' vazio; usando o padrão %s",
                 c->arq, c->linha, PADRAO_ALGORITMO);
@@ -414,9 +414,9 @@ static void ler_linha_tarefa(Ctx *c, char *s, int **ids, int **linhas_id, int *n
                 strlen(nova->eventos) > 60 ? "..." : "");
 }
 
-/* ========================================================================= 
-    \* 5\. LEITURA DE ARQUIVO E ENTRADA PRINCIPAL DO PARSER \*
-    ========================================================================= */
+/* =========================================================================
+ * 5. LEITURA DE ARQUIVO E ENTRADA PRINCIPAL DO PARSER
+ * ========================================================================= */
 
 //Abre o arquivo em modo binário ("rb"), lê todo o seu conteúdo para um buffer em memória RAM dinamicamente redimensionado e insere o caractere nulo '\0' no final.
 static char *ler_arquivo(Config *cfg, const char *caminho) {
@@ -455,9 +455,9 @@ static char *ler_arquivo(Config *cfg, const char *caminho) {
 }
 
 /*É a função principal do módulo. Carrega o arquivo de configuração, descarta 
-\* a marcação BOM de arquivos UTF-8 do Windows, percorre o arquivo linha por linha, 
-\* chama o parser da linha do sistema e das tarefas e verifica os erros fatais. 
-\* Retorna true se o arquivo foi carregado sem erros fatais. */
+ * a marcação BOM de arquivos UTF-8 do Windows, percorre o arquivo linha por linha, 
+ * chama o parser da linha do sistema e das tarefas e verifica os erros fatais. 
+ * Retorna true se o arquivo foi carregado sem erros fatais. */
 bool config_carregar(const char *caminho, Config *cfg) {
     config_padrao(cfg);
     cfg->caminho = xstrdup(caminho);

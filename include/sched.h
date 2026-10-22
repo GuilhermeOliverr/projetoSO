@@ -25,7 +25,7 @@
 
 #include "task.h"
 
-// Define o tipo de ponteiro de função 'prioridade\_fn' que calcula e retorna a prioridade nominal da tarefa 'k' no tick 'agora'
+// Define o tipo de ponteiro de função 'prioridade_fn' que calcula e retorna a prioridade nominal da tarefa 'k' no tick 'agora'
 typedef int (*prioridade_fn)(const TCB *k, int agora);
 
 // Início da definição da estrutura que representa um algoritmo de escalonamento ("plugin")

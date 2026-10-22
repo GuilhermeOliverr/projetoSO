@@ -42,7 +42,7 @@ struct Tela;    // Declaração antecipada da estrutura 'Tela' (buffer de memór
 
 // Estrutura VistaGantt, que funciona como os parâmetros da "câmera" para desenhar o gráfico na tela
 typedef struct {
-    int x, y, w, h;      // Estrutura VistaGantt, que funciona como os parâmetros da "câmera" para desenhar o gráfico na tela
+    int x, y, w, h;      // Retângulo da tela reservado para o gráfico: canto superior esquerdo (x, y), largura w e altura h, em pixels
     int t_ini;           // Define o primeiro tick visível no canto esquerdo, permitindo a rolagem horizontal no tempo
     int cw;              // Define a largura em pixels de cada tick (coluna), permitindo o controle do nível de zoom
     int y_rol;           // Deslocamento vertical em pixels para rolagem da lista de tarefas quando houver muitas tarefas no eixo Y

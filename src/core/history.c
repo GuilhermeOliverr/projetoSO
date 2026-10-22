@@ -24,9 +24,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* ========================================================================= 
-    \* 1\. GERENCIAMENTO DE SNAPSHOTS (Fotografias da Memória por Tick) \*
-    ========================================================================= \*/
+/* =========================================================================
+ * 1. GERENCIAMENTO DE SNAPSHOTS (Fotografias da Memória por Tick)
+ * ========================================================================= */
 
 
 //Realiza uma cópia profunda (deep copy) de uma estrutura de Estado 'src' para 'dst'.
@@ -63,7 +63,7 @@ void hist_gravar(Simulador *s) {
         memset(s->snaps + s->capsnaps, 0, (size_t)(nova - s->capsnaps) * sizeof(Estado));    // Zera a nova área alocada de memória usando memset()
         s->capsnaps = nova;
     }
-    estado_copiar(&s->snaps[t], &s->atual);    // Clona o estado corrente no snapshot do tick 't' usando estado\_copiar()
+    estado_copiar(&s->snaps[t], &s->atual);    // Clona o estado corrente no snapshot do tick 't' usando estado_copiar()
     if (t + 1 > s->nsnaps) s->nsnaps = t + 1;
 }
 
@@ -72,7 +72,7 @@ void hist_gravar(Simulador *s) {
 void hist_truncar(Simulador *s, int t) {
     if (s->historico) {
         for (int k = t + 1; k < s->nsnaps; k++) 
-            estado_liberar(&s->snaps[k]);    // Libera a memória de cada snapshot futuro usando estado\_liberar()
+            estado_liberar(&s->snaps[k]);    // Libera a memória de cada snapshot futuro usando estado_liberar()
         if (s->nsnaps > t + 1) s->nsnaps = t + 1;
     }
     /* Colunas >= t e eventos gerados em ticks >= t pertencem ao futuro.
@@ -90,9 +90,9 @@ void hist_carregar(Simulador *s, int t) {
     estado_copiar(&s->atual, &s->snaps[t]);
 }
 
-/* ========================================================================= 
-    \* 2\. GERENCIAMENTO DO RASTRO GRÁFICO (Matrizes do Gantt) \* 
-    ========================================================================= \*/
+/* =========================================================================
+ * 2. GERENCIAMENTO DO RASTRO GRÁFICO (Matrizes do Gantt)
+ * ========================================================================= */
 
 //Garante a alocação de espaço para a coluna correspondente ao 'tick' nas matrizes 
 //do Gráfico de Gantt e limpa as células (marcando como vazia e sem CPU alocada).
@@ -116,7 +116,7 @@ void rastro_garantir_coluna(Simulador *s, int tick) {
 }
 
 //Reorganiza as matrizes 2D do rastro do Gantt quando uma nova tarefa é adicionada.
-//Como o layout da matriz é 'tick \* largura + tarefa', alterar a largura exige reestruturar 
+//Como o layout da matriz é 'tick * largura + tarefa', alterar a largura exige reestruturar 
 //e copiar o conteúdo linha por linha em novos blocos de memória.
 void rastro_ajustar_largura(Simulador *s, int largura) {
     if (largura <= s->largura) return;
@@ -140,9 +140,9 @@ void rastro_ajustar_largura(Simulador *s, int largura) {
     s->largura = largura;
 }
 
-/* ========================================================================= 
-    \* 3\. REGISTRO DE EVENTOS \* 
-    ========================================================================= \*/
+/* =========================================================================
+ * 3. REGISTRO DE EVENTOS
+ * ========================================================================= */
 
 //Adiciona um novo evento ocorrido (chegada, fim de ativação, perda de prazo, sorteio) ao vetor dinâmico de eventos da simulação.
 void evento_add(Simulador *s, int tick, int instante, TipoEvento tipo, int tarefa, int ativ, int cpu) {

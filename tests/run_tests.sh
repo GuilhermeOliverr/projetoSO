@@ -104,6 +104,16 @@ grep -q 'CPU0: \[0,12)T3 \[12,15)T1 \[15,18)T2' "$TMP/out" \
     && ok "deadlines absolutos iguais caem no critério 3: vence o menor ingresso (T1)" \
     || falha "critério 2 (deadline absoluto)" "$(grep 'CPU0:' "$TMP/out" | head -1 | cut -c1-100)"
 
+echo "== Desempate: critério 1 quando a próxima ativação chega no fim da anterior"
+# T1 e T2 iguais (C = 5, P = 10) numa CPU. Quem executou de 5 a 10 termina a
+# ativação em t = 10, no mesmo instante em que chegam as próximas das duas:
+# pelo critério 1 ela continua, de 5 a 15. Só o empate de t = 0 (quando
+# ninguém executava antes) vai para o sorteio.
+roda tests/validos/21_criterio1_chegada_no_fim.txt > "$TMP/out"
+[ "$(grep -c 'sorteio (ativação' "$TMP/out")" -eq 1 ] && grep -q 'CPU0: \[0,5)T. \[5,15)T. \[15,25)T.' "$TMP/out" \
+    && ok "quem estava executando continua quando a nova ativação chega junto (sem sorteio)" \
+    || falha "critério 1 com chegada no fim da ativação" "$(grep 'sorteio (ativação' "$TMP/out" | head -3 | tr '\n' ' ')"
+
 echo "== Determinismo"
 roda tests/validos/16_quarenta_tarefas.txt > "$TMP/a"
 roda tests/validos/16_quarenta_tarefas.txt > "$TMP/b"

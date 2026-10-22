@@ -11,7 +11,7 @@
  * Preemptivo: a cada tick o escalonador reavalia. Se uma tarefa de período
  * menor chega, ela tira a CPU de uma de período maior no mesmo instante.
  */
-#include "sched.h"
+#include "sched.h" 
 
 static int prioridade_rm(const TCB *k, int agora) {
     (void)agora;   /* o cast para void diz ao compilador que ignorar o

@@ -31,8 +31,8 @@
 #include <string.h>
 
 /* =========================================================================
-    \* 1\. GERENCIAMENTO DE EVENTOS E SNAPSHOTS DA SIMULAÇÃO \*
-========================================================================= \*/
+ * 1. GERENCIAMENTO DE EVENTOS E SNAPSHOTS DA SIMULAÇÃO
+ * ========================================================================= */
 
 //Registra um evento ocorrido (chegada, fim de ativação, perda de prazo, sorteio ou fim de quantum) 
 //no vetor dinâmico de eventos da simulação. Dobra a capacidade do vetor se ele ficar cheio.
@@ -106,9 +106,9 @@ static bool todas_terminadas(const Estado *e) {
     return true;
 }
 
-/* ========================================================================= 
-    \* 2\. INICIALIZAÇÃO E VERIFICAÇÃO DO ESTADO DA SIMULAÇÃO \*
-========================================================================= \*/
+/* =========================================================================
+ * 2. INICIALIZAÇÃO E VERIFICAÇÃO DO ESTADO DA SIMULAÇÃO
+ * ========================================================================= */
 
 //Inicializa a estrutura do simulador no tick 0, carrega o algoritmo de escalonamento, 
 //aloca a matriz do Gráfico de Gantt e salva o primeiro snapshot de memória.
@@ -403,7 +403,14 @@ static void executar_tick(Simulador *s) {
                 /* Nada pendente: espera o próximo período. */
                 k->estado = T_SUSPENSA;
                 k->motivo = SUSP_PERIODO;
-                k->cpu = -1;
+                /* Se a próxima ativação chega justo agora, no instante t+1
+                 * (ela só é liberada no passo 1 do próximo tick), a tarefa
+                 * continua contando como "estava executando" para o critério
+                 * 1, igual ao caso da ativação acumulada acima. Ex.: RM, 1
+                 * CPU, T1 e T2 com C = 5 e P = 10; T2 executa de 35 a 40 e,
+                 * em t = 40, chegam as duas: T2 continua, sem sorteio. */
+                if (!(k->liberadas < MAX_ATIVACOES && k->proxima_chegada == t + 1))
+                    k->cpu = -1;
             }
         }
         /* O deadline é um instante: a ativação tem que terminar até ele.
