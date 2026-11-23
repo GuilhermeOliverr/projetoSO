@@ -7,7 +7,7 @@
  * antes tem prioridade). Serve só para mostrar o mecanismo.
  *
  * Compilar:  make plugins
- * Usar:      ./projetoSO arquivo.txt --plugin plugins/exemplo_fifo.so
+ * Usar:      ./projetoSO arquivo.txt --plugin exemplo_fifo.so
  *            (e no arquivo: FIFO;quantum;cpus)
  */
 #include "sched.h"

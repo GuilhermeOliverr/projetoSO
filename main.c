@@ -16,7 +16,6 @@
 #include "config.h"
 #include "sched.h"
 #include "ui.h"
-#include "util.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,14 +35,25 @@ static void uso(const char *prog) {
            "  --texto                no modo completo, imprime também a linha do tempo em texto\n"
            "  --validar              só carrega e valida o arquivo (código de saída 0 = válido)\n"
            "  --semente N            semente do sorteio de desempate (padrão: 1; 0 = relógio)\n"
-           "  --plugin LIB.so        carrega um escalonador de uma biblioteca dinâmica\n"
+           "  --plugin ARQ           carrega um escalonador: ARQ.txt (fórmula da prioridade, ex.:\n"
+           "                         'nome: LLF' e 'prioridade: deadline_abs - agora - restante')\n"
+           "                         ou ARQ.so/ARQ.dylib (plugin compilado); pode repetir\n"
            "  --sem-cor              desliga as cores ANSI\n"
            "  --terminal             usa a interface de texto em vez da janela gráfica\n"
            "  -h, --help             mostra esta ajuda\n\n"
            "Formato do arquivo:\n"
            "  algoritmo_escalonamento;quantum;qtde_cpus\n"
            "  id;cor;ingresso;duracao;periodo;prazo;lista_eventos\n"
-           "  ...\n", prog);
+           "  ...\n\n"
+           "O id pode ser número ou texto (ex.: 0, 1, 01, T0, t1, A, Tarefa_2), até 31 bytes:\n"
+           "  - ordem (menor id embaixo no Gantt): inteiros pelo valor, antes dos textos;\n"
+           "    textos em ordem natural, sem diferenciar maiúsculas (T2 antes de T10);\n"
+           "  - repetidos: T1 e t1, 01 e 1, T01 e T1 são o mesmo id (0 e T0 não são);\n"
+           "  - rótulo: T<id> se todos os ids forem inteiros (T0, T1), senão o id como foi escrito.\n"
+           "Linha que começa com '#' e não tem ';' é comentário (\"#1;...\" é a tarefa de id #1).\n\n"
+           "Algoritmo que não é RM nem EDF (ex.: LLF;2;1): se houver LLF.txt (ou .so/.dylib) na pasta do\n"
+           "arquivo de configuração, ele é carregado sozinho; senão, use --plugin, o botão \"Carregar\n"
+           "escalonador...\" da janela ou o comando p do terminal.\n", prog);
 }
 
 /*
@@ -103,10 +113,12 @@ int main(int argc, char **argv) {
             }
             op.semente = v ? (uint64_t)v : (uint64_t)time(NULL);
         } else if (!strcmp(a, "--plugin") && tem_valor) {
-            char erro[1024];
-            int idx = sched_carregar_plugin(argv[++i], erro, sizeof erro);
+            /* .txt (fórmula), .so ou .dylib: quem decide é a extensão. Pode
+             * repetir: cada --plugin acrescenta um escalonador à tabela. */
+            char erro[4096];
+            int idx = sched_carregar_arquivo(argv[++i], erro, sizeof erro);
             if (idx < 0) {
-                fprintf(stderr, "erro: plugin: %s\n", erro);
+                fprintf(stderr, "erro: não foi possível carregar o escalonador de '%s':\n%s\n", argv[i], erro);
                 return 2;
             }
             printf("Escalonador '%s' carregado de %s\n", sched_obter(idx)->nome, argv[i]);

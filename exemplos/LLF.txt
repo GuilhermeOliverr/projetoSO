@@ -1,0 +1,5 @@
+# LLF.txt - Least Laxity First (menor folga primeiro)
+# folga = quanto a ativação ainda pode esperar sem perder o prazo
+nome: LLF
+descricao: menor folga primeiro
+prioridade: deadline_abs - agora - restante

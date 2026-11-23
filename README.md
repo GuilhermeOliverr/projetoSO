@@ -23,8 +23,8 @@ projeto são:
 | Comando | O que faz |
 |---------|-----------|
 | `make` | compila o simulador e gera o executável `projetoSO` |
-| `make plugins` | compila o escalonador de exemplo (`plugins/exemplo_fifo.so`) |
-| `make test` | compila o que faltar e roda a bateria de testes |
+| `make plugins` | compila o escalonador de exemplo (`exemplo_fifo.so`) |
+| `make test` | compila tudo e roda a bateria de testes (`tests/run_tests.sh`) |
 | `make clean` | apaga o executável, os plugins e os SVGs gerados |
 
 Para saber se já está instalado, rode `make --version`. Se não estiver:
@@ -44,27 +44,30 @@ direto, na pasta do projeto:
 
 ```bash
 # Linux ou WSL
-gcc -std=c11 -O2 -Iinclude -o projetoSO src/*.c src/*/*.c -ldl
+gcc -std=c11 -O2 -o projetoSO config.c gantt.c gfx.c gfx_plataforma.c main.c sched.c sim.c ui.c ui_gui.c -ldl
 
 # macOS
-gcc -std=c11 -O2 -Iinclude -o projetoSO src/*.c src/*/*.c -ldl \
+gcc -std=c11 -O2 -o projetoSO config.c gantt.c gfx.c gfx_plataforma.c main.c sched.c sim.c ui.c ui_gui.c -ldl \
     -framework Cocoa -framework CoreGraphics -lobjc
 ```
 
 ```powershell
 # Windows (MSYS2); sem -ldl, os plugins ficam desativados
-gcc -std=c11 -O2 -Iinclude -o projetoSO.exe src/*.c src/*/*.c -lgdi32
+gcc -std=c11 -O2 -o projetoSO.exe config.c gantt.c gfx.c gfx_plataforma.c main.c sched.c sim.c ui.c ui_gui.c -lgdi32
 ```
 
-Depois é só executar `./projetoSO exemplos/fig2_5_rm.txt` (no Windows,
-`.\projetoSO.exe exemplos\fig2_5_rm.txt`). O plugin de exemplo, sem o `make`:
+Depois é só executar `./projetoSO config.txt` (no Windows,
+`.\projetoSO.exe config.txt`), onde `config.txt` é qualquer arquivo de
+configuração (formato na seção "Arquivo de configuração"). O plugin de
+exemplo, sem o `make`:
 
 ```bash
-gcc -std=c11 -O2 -Iinclude -fPIC -shared -o plugins/exemplo_fifo.so plugins/exemplo_fifo.c
+gcc -std=c11 -O2 -fPIC -shared -o exemplo_fifo.so exemplo_fifo.c
 ```
 
-E os testes: `sh tests/run_tests.sh` (precisa do executável e do plugin já
-compilados).
+Todo o código fica numa pasta só, sem subpastas (o formato da entrega no
+Moodle, que não guarda pastas). Os arquivos de exemplo ficam em `exemplos/` e a
+bateria de testes automáticos em `tests/` (rode com `make test`).
 
 ## Instalação
 
@@ -115,6 +118,10 @@ git clone https://github.com/GuilhermeOliverr/projetoSO.git
 cd projetoSO
 ```
 
+O código fica na raiz do repositório, um arquivo por módulo (ver "Estrutura").
+Versões antigas organizavam o mesmo código em pastas (`src/`, `include/`,
+`plugins/`); elas continuam no histórico do git.
+
 ## Compilação e execução
 
 ### Linux ou dentro do WSL
@@ -122,11 +129,10 @@ cd projetoSO
 ```bash
 make                                   # compila e gera o executável projetoSO
 ./projetoSO                            # abre a janela e pede o arquivo
-./projetoSO exemplos/fig2_5_rm.txt     # abre a janela já com o arquivo
+./projetoSO config.txt                 # abre a janela já com o arquivo
 ./projetoSO --terminal                 # mesma interface, no terminal
 make plugins                           # compila o escalonador de exemplo (.so)
-./projetoSO exemplos/fig2_5_rm.txt --plugin plugins/exemplo_fifo.so
-make test                              # roda a bateria de testes (compila os plugins antes)
+./projetoSO config.txt --plugin exemplo_fifo.so
 make clean                             # remove executável, plugins e SVGs gerados
 ```
 
@@ -140,14 +146,14 @@ Dentro da pasta do projeto, sem precisar abrir o Ubuntu:
 
 ```powershell
 wsl -d Ubuntu make
-wsl -d Ubuntu ./projetoSO exemplos/fig2_5_rm.txt
+wsl -d Ubuntu ./projetoSO config.txt
 ```
 
 ### Windows com MSYS2
 
 ```powershell
 make
-.\projetoSO.exe exemplos\fig2_5_rm.txt
+.\projetoSO.exe config.txt
 ```
 
 A janela usa a API Win32, que faz parte do Windows. (No MSYS2 os plugins
@@ -160,7 +166,7 @@ tiver). A janela usa o Cocoa, que já vem no macOS.
 
 ```bash
 make
-./projetoSO exemplos/fig2_5_rm.txt
+./projetoSO config.txt
 ```
 
 ## Como usar
@@ -173,7 +179,8 @@ make
   --texto                no modo completo, imprime também a linha do tempo em texto
   --validar              só carrega e valida o arquivo (código de saída 0 = válido)
   --semente N            semente do sorteio de desempate (padrão 1; 0 = relógio)
-  --plugin LIB.so        carrega um escalonador de uma biblioteca dinâmica
+  --plugin ARQ           carrega um escalonador: ARQ.txt (fórmula), ARQ.so ou ARQ.dylib;
+                         pode repetir (ver "Como incluir um novo escalonador")
   --sem-cor              desliga as cores ANSI
   --terminal             usa a interface de texto em vez da janela gráfica
   -h, --help             mostra a ajuda
@@ -188,8 +195,9 @@ Sem `--modo`, o programa abre uma **janela gráfica**:
    programa** e **Pasta acima**.
    Se o arquivo tiver erros, todos aparecem com linha, campo e motivo.
 2. **Configuração**: mostra sistema e tarefas com os valores atuais; botões
-   para trocar algoritmo, quantum e CPUs, editar/adicionar/remover tarefas ou
-   abrir outro arquivo. Os formulários já vêm com os valores sugeridos e
+   para trocar algoritmo, quantum e CPUs, carregar um escalonador de um arquivo
+   (**Carregar escalonador...**), editar/adicionar/remover tarefas ou abrir outro
+   arquivo. Os formulários já vêm com os valores sugeridos e
    recusam valores inválidos dizendo o motivo.
 3. **Passo a passo** ou **Execução completa**: Gantt na janela (com legenda,
    rolagem e zoom), painel do tick (CPUs, fila e eventos) e painel da tarefa
@@ -205,9 +213,9 @@ A interface de texto continua completa e faz o mesmo que a janela:
 
 ```bash
 ./projetoSO --terminal                          # pede o caminho do arquivo
-./projetoSO exemplos/fig2_5_rm.txt --terminal   # já carrega o arquivo
-./projetoSO exemplos/fig2_5_rm.txt --modo passo     # direto no passo a passo
-./projetoSO exemplos/fig2_5_rm.txt --modo completo  # roda tudo e mostra o resultado
+./projetoSO config.txt --terminal              # já carrega o arquivo
+./projetoSO config.txt --modo passo            # direto no passo a passo
+./projetoSO config.txt --modo completo         # roda tudo e mostra o resultado
 ```
 
 Ela é usada quando se passa `--terminal`, `--modo` ou `--validar`, quando a
@@ -229,8 +237,9 @@ Comandos da tela de configuração:
 |---------|------|
 | `Enter` | iniciar (depois pergunta o modo: `a` passo a passo, `b` completa) |
 | `a` / `k` / `c` | troca algoritmo / quantum / quantidade de CPUs |
-| `e id` / `r id` | edita / remove a tarefa |
+| `e id` / `r id` | edita / remove a tarefa (o id pode ser texto: `e T0`, `r A`) |
 | `n` | nova tarefa |
+| `p arquivo` | carrega um escalonador (`.txt` com a fórmula, `.so` ou `.dylib`) e passa a usá-lo |
 | `l` | carrega outro arquivo |
 | `q` | sair |
 
@@ -248,7 +257,7 @@ qualquer momento.
 | `g t` | vai para o instante t |
 | `r` | roda até o fim |
 | `s` | estado do sistema (todas as tarefas, CPUs, utilização) |
-| `t id` | TCB completo de uma tarefa |
+| `t id` | TCB completo de uma tarefa (`t 1`, `t T0`; sem diferenciar maiúsculas) |
 | `e id` | edita a tarefa: cor, duração, período, prazo, ingresso, ticks restantes, suspender/retomar, encerrar |
 | `+` | adiciona uma tarefa |
 | `a` / `k` / `c` | troca algoritmo / quantum / quantidade de CPUs |
@@ -270,6 +279,10 @@ fazem sentido são recusadas com o motivo.
   Suspensa: preto pontilhado.
 - Marcadores: chegada (↓), fim de ativação (↑ / △), término da 10ª ativação (■),
   perda de prazo (✗ vermelho), sorteio de desempate (?).
+- Linha da CPU no Gantt do terminal: cada trecho mostra o id da tarefa que ocupou
+  a CPU. Ids de texto aparecem sem o prefixo comum a todos (T1, T2, T3 viram 1, 2,
+  3, como com ids inteiros). Num trecho curto demais para o id, aparece o
+  caractere que o diferencia dos outros (com A1, A2 e B1: `1`, `2` e `B`).
 
 ## Arquivo de configuração
 
@@ -289,6 +302,26 @@ RM;2;1
 
 - `RM`/`EDF` sem diferenciar maiúsculas; `;` no fim da linha é opcional; espaços,
   linhas em branco, `\r\n` do Windows e BOM UTF-8 são aceitos; cor com ou sem `#`.
+- **id**: número ou texto, como `0`, `1`, `01`, `-1`, `T0`, `t1`, `A`, `Tarefa_2`
+  ou `Tarefa 2`, começando em 0 ou em 1, seguidos ou não. Pode ter até 31 bytes
+  (letra acentuada ocupa 2) e não pode ser vazio nem ter caractere de controle
+  (ex.: tab). Arquivo salvo em ANSI/Latin-1 pelo Bloco de Notas também é aceito:
+  o acento aparece como `?` na janela e no SVG.
+  - **Ordem** (menor id junto do eixo X): ids inteiros pelo valor
+    (`-1 < 0 < 2 < 10`) e antes dos de texto; os de texto em ordem natural, sem
+    diferenciar maiúsculas, com os números dentro do texto valendo pelo valor
+    (`T0 < T1 < T2 < T10`).
+  - **Repetidos** (erro): `T1` e `t1`, `01` e `1`, `T01` e `T1` são o mesmo id.
+    `0` e `T0` não são (um é número, o outro texto).
+  - **Rótulo** no Gantt: se todos os ids são inteiros, `T<id>` (T0, T1, T10);
+    se algum é texto, todos aparecem como foram escritos (evita `TT1`, e que
+    `0` e `T0` apareçam os dois como `T0`). Um id inteiro é guardado na forma do
+    número: `01` aparece como `1`, igual a quando o id era um `int`.
+  - **Tarefa nova**: sugere o maior id + 1 se todos são inteiros (0, 1, 2 → 3);
+    o próximo do mesmo prefixo se os de texto são todos prefixo + número
+    (T0, T1, T5 → T6); senão n+1, pulando os que já existem.
+- **Comentário**: linha que começa com `#` e não tem nenhum `;` é ignorada. Com
+  `;` ela é lida normalmente: `#1;E74C3C;0;2;10;10` é a tarefa de id `#1`.
 - Campo vazio usa o valor padrão (com aviso). `prazo` vazio ou ausente = período.
 - `periodo = 0` (aperiódica) é ignorada com aviso; `periodo < 0` é erro.
 - `lista_eventos` é guardada sem interpretação: o texto cru e a
@@ -297,10 +330,184 @@ RM;2;1
 - Erros dizem arquivo, linha, campo e motivo, por exemplo:
   `config.txt:2: campo 'periodo' = -3: valor negativo não é permitido (...)`.
 
-Mais exemplos em `exemplos/` e `tests/validos/`.
+Mais exemplos nas pastas `exemplos/` e `tests/validos/`.
+
+## Como incluir um novo escalonador
+
+O contrato (req. 4.2): um escalonador só diz a **prioridade nominal** de uma
+tarefa num instante (um número; menor = mais prioritária). A simulação monta a
+fila global, aplica o desempate comum (CPU anterior, prazo, ingresso, duração,
+sorteio) e entrega as M melhores às M CPUs. É um número, e não "a próxima
+tarefa", porque com M CPUs é preciso ordenar todas e pegar as M melhores, com o
+mesmo desempate para qualquer algoritmo. A simulação nunca cita RM, EDF ou
+fórmula.
+
+| Forma | Como | Quando usar |
+|---|---|---|
+| Nativo | uma função de prioridade e um `const Escalonador` em `sched.c` (seção sched_registro.c), mais uma linha na lista `nativos`; recompilar | o que faz parte do programa (RM, EDF) |
+| Plugin `.so`/`.dylib` | compilar como biblioteca (`exemplo_fifo.c`, `make plugins`) e `--plugin arq.so` | algoritmos que uma fórmula não expressa; precisa de compilador e só abre no mesmo sistema e processador em que foi compilado (um `.so` de Linux x86-64 não abre num Mac arm64) |
+| Arquivo `.txt` | a fórmula da prioridade, interpretada pelo programa | o mais fácil e portátil: sem compilador, igual no macOS, Linux e Windows, e sem executar código de fora |
+
+### O arquivo `.txt`
+
+```
+# LLF.txt - Least Laxity First
+nome: LLF
+descricao: menor folga primeiro
+prioridade: deadline_abs - agora - restante
+```
+
+O arquivo está em `exemplos/LLF.txt`, e `exemplos/llf_auto.txt` é uma
+configuração `LLF;2;1` que o carrega automaticamente (ver "Como carregar").
+- Uma chave por linha, `chave: valor` ou `chave = valor`. Chaves (sem diferenciar
+  maiúsculas): `nome` e `prioridade` (obrigatórias) e `descricao` ou `descrição`
+  (opcional; padrão "carregado de LLF.txt"). Linha vazia e linha começando com
+  `#` são ignoradas; BOM UTF-8 e `\r\n` são aceitos, como no arquivo de
+  configuração.
+- `nome`: até 31 caracteres, sem espaço nem `;` (ele vai na 1ª linha da
+  configuração, ex.: `LLF;2;1`). Não pode repetir um que já existe: um arquivo
+  nunca substitui RM/EDF.
+- Fórmula: inteiros de 0 a 2147483647, `+ - * / %`, menos unário, parênteses,
+  `min(a, b, ...)`, `max(a, b, ...)` e `abs(a)`. Campos e funções sem diferenciar
+  maiúsculas.
+- Campos (da tarefa avaliada): `periodo`, `prazo`, `duracao`, `ingresso`,
+  `restante` (ticks que faltam na ativação atual), `chegada_atual` (instante em
+  que a ativação atual chegou), `deadline_abs` (`chegada_atual + prazo`),
+  `fila_desde` (instante em que a tarefa entrou no fim da fila de prontas; ver
+  "Quantum") e `agora` (o tick que está sendo escalonado).
+- A divisão é a do C: inteira, truncando para zero (`7 / 2 = 3`, `-7 / 2 = -3`);
+  `%` tem o sinal do dividendo (`-7 % 2 = -1`).
+- As contas são feitas em 64 bits, conferindo estouro em cada operação; o
+  resultado precisa caber num `int`.
+- A fórmula é conferida e compilada (para notação pós-fixa) na carga; a cada tick
+  ela só é avaliada, usando apenas a própria tarefa e `agora`. Por isso voltar no
+  tempo e avançar de novo dá o mesmo resultado.
+
+| Algoritmo | `prioridade:` |
+|---|---|
+| RM (Rate Monotonic) | `periodo` |
+| EDF (Earliest Deadline First) | `deadline_abs` |
+| DM (Deadline Monotonic) | `prazo` |
+| SRTF (menor tempo restante) | `restante` |
+| FIFO (chegada da ativação) | `chegada_atual` |
+| LLF (menor folga) | `deadline_abs - agora - restante` |
+| RR (Round Robin, usa o quantum) | `fila_desde` |
+
+### Como carregar
+
+- Linha de comando: `./projetoSO config.txt --plugin LLF.txt` (aceita `.txt`,
+  `.so` e `.dylib`; pode repetir).
+- Janela: botão **Carregar escalonador...** na tela de configuração ou na janela
+  "Escolha o algoritmo". O navegador abre na pasta do arquivo de configuração, com
+  o atalho **Pendrives e discos**; o carregado já fica escolhido.
+- Terminal: `p arquivo` na tela de configuração, ou digitar o caminho do
+  arquivo quando o comando `a` pede o algoritmo (também no passo a passo).
+- Automático (pendrive): se a 1ª linha do arquivo de configuração pede, por
+  exemplo, `LLF;2;1` e LLF não está registrado, o programa procura na mesma pasta
+  `LLF.txt`, `LLF.so` ou `LLF.dylib`, nessa ordem e sem diferenciar maiúsculas
+  (`Llf.TXT` serve), e avisa "escalonador LLF carregado automaticamente de ...".
+  O `nome:` de dentro do arquivo precisa ser o mesmo. Arquivos ocultos (inclusive
+  os `._*` que o macOS cria em pendrive FAT) são ignorados.
+
+Os carregados entram sempre depois de RM (0) e EDF (1) e não são descarregados
+enquanto o programa roda, porque a configuração e o histórico guardam o índice
+do algoritmo.
+
+### Erros
+
+- Na carga, todos os problemas do arquivo aparecem de uma vez, com linha e
+  coluna, por exemplo `LLF.txt:4: fórmula da prioridade: campo desconhecido
+  'periodoo' na coluna 1; os campos são: periodo, prazo, ...`. Se houver erro,
+  nada é registrado.
+- Durante a simulação, divisão ou resto por zero, estouro ou um resultado fora do
+  `int` param a simulação naquele tick, com a mensagem (ex.: `escalonador LLF:
+  divisão por zero (10 / 0) ao calcular a prioridade da tarefa 2 no instante 7`).
+  Nenhum valor é inventado, porque isso mudaria o escalonamento sem aviso. O que
+  foi simulado até o tick anterior continua valendo: dá para voltar no tempo ou
+  trocar o algoritmo e seguir.
+
+### Limite
+
+Só cabem algoritmos cuja prioridade é um número calculado a partir da própria
+tarefa e do instante. O Round Robin cabe porque a posição na fila virou um campo
+da tarefa (`fila_desde`, mantido pela simulação; ver "Quantum"). Filas multinível
+e loteria continuam não cabendo: precisam de um estado próprio do escalonador (em
+que fila cada tarefa está e quando ela desce de fila; os bilhetes e o sorteio
+entre eles) que não é um campo da tarefa, e a fórmula não guarda nada de um tick
+para o outro.
+
+## Desempate (req. 4.3)
+
+Quando duas tarefas têm a mesma prioridade, vale o primeiro critério que as
+diferencia, nesta ordem, para TODOS os algoritmos (RM, EDF e os carregados por
+`.txt` ou `.so`):
+
+1. a tarefa que estava executando logo antes do escalonamento (evita trocar de
+   contexto para a própria tarefa);
+2. o menor **prazo relativo** da tarefa (o campo `prazo` do arquivo);
+3. o menor instante de **ingresso** da tarefa (campo `ingresso`: quando ela foi
+   criada, como define o enunciado);
+4. a menor **duração**;
+5. sorteio, com o "?" no Gantt no momento em que a escolhida (re)começa a
+   executar. O gerador guarda o estado no histórico, então voltar e avançar dá
+   o mesmo sorteio.
+
+Por que o critério 2 é o prazo relativo, e não o deadline absoluto: é a leitura
+literal do enunciado ("o prazo da tarefa", que é o parâmetro `prazo` do item
+3.3); no EDF a prioridade já é o deadline absoluto, então desempatar por ele de
+novo nunca teria efeito; no RM, entre tarefas de mesmo período, vai primeiro a
+de prazo mais restrito. O critério 1 só existe se a tarefa estava na CPU: uma
+tarefa preemptada não tem vantagem.
+
+## Quantum
+
+O quantum é lido do arquivo e o simulador conta quantos ticks seguidos cada
+tarefa executou. O uso dele é **específico de cada escalonador** (resposta do
+professor): RM e EDF decidem só pela prioridade, então ao fim do quantum o
+escalonador é chamado de novo (evento "fim de quantum" no painel do tick) e,
+pelo critério 1, a mesma tarefa continua se ainda for a mais prioritária. Isso
+mantém a ordem 1→5 do desempate igual para todos os algoritmos.
+
+Um escalonador que queira usar o quantum faz isso pela **prioridade**, com o
+campo `fila_desde` do TCB: o instante em que a tarefa entrou no fim da fila de
+prontas. A simulação o atualiza assim:
+- recebe o instante atual quando uma ativação começa a disputar a CPU (na
+  chegada; ou, se ela estava acumulada atrás da anterior, quando a anterior
+  termina);
+- recebe o instante atual quando a tarefa esgota o quantum (volta para o fim
+  da fila);
+- não muda quando a tarefa é preemptada por outra mais prioritária (ela mantém
+  o lugar na fila, como no Round Robin com prioridades).
+
+Round Robin, então, é só uma fórmula:
+
+```
+nome: RR
+descricao: Round Robin (usa o quantum)
+prioridade: fila_desde
+```
+
+Exemplo (`RR;2;1`, T1 e T2 com duração 3, T3 com duração 2, todas chegando em
+0): `[0,2)T1 [2,4)T2 [4,6)T3 [6,7)T1 [7,8)T2`. Empates de `fila_desde` caem
+na mesma cadeia do 4.3 (ex.: as três chegam juntas, e T1 vai primeiro pelo
+prazo). Como a vantagem de quem esgotou o quantum some pela prioridade, e não
+por uma exceção no desempate, o 4.3 continua valendo sem mudança. RM e EDF não
+leem `fila_desde`: a escala deles é a mesma de antes. Plugins `.so` enxergam o
+campo pelo TCB e precisam ser recompilados (`make plugins`), porque o TCB mudou
+de tamanho.
 
 ## Decisões de implementação
 
+- **Id em texto**: o enunciado não fixa o tipo do id, então ele é texto, num
+  vetor de tamanho fixo (`char id[ID_MAX]`, 32 bytes, em `sched.h`) dentro do
+  TCB e da `TarefaCfg`. Não é `char *` porque o TCB é copiado por `memcpy` a
+  cada snapshot do histórico: com ponteiro, cada cópia precisaria de
+  `strdup`/`free`, com risco de double free e vazamento. As regras (validar,
+  comparar, rótulo, sugestão) ficam todas em `config.c` (funções `id_*`). O
+  escalonador não usa o id: o desempate é pela CPU anterior, prazo, ingresso,
+  duração e sorteio. As buscas por id devolvem o índice da tarefa (-1 se não
+  existe), nunca um id. Plugins `.so` precisam ser recompilados
+  (`make plugins`), porque o TCB mudou de tamanho.
 - **Modelo de tempo**: o tick t é o intervalo [t, t+1). Chegadas acontecem no
   instante t; fim de ativação e perda de prazo são verificados no instante t+1.
   A ativação k chega em `ingresso + k·período` e tem deadline
@@ -308,15 +515,13 @@ Mais exemplos em `exemplos/` e `tests/validos/`.
 - **Escalonamento global**: a cada tick, as M tarefas de maior prioridade
   (M = CPUs) executam; quem já estava numa CPU continua nela (evita migração).
   CPU sem tarefa fica desligada.
-- **Desempate** (todos os algoritmos): (1) quem estava executando; (2) deadline
-  absoluto mais próximo (urgência real da ativação atual); (3) ingresso da tarefa mais antigo (instante de
-  criação, como define o enunciado); (4) menor duração;
-  (5) sorteio. O sorteio só acontece quando decide quem executa, usa um gerador
-  com estado guardado no snapshot (voltar/avançar é determinístico) e aparece no Gantt.
-- **Quantum**: ao fim do quantum o escalonador é chamado de novo (evento
-  "fim de quantum", visível no passo a passo); pelo desempate (1) a mesma
-  tarefa continua se ainda for a de maior prioridade. Assim o quantum existe
-  sem distorcer RM/EDF nem a ordem 1→5 do desempate.
+- **Desempate** (todos os algoritmos): (1) quem estava executando; (2) menor
+  prazo relativo (campo `prazo`); (3) ingresso mais antigo; (4) menor duração;
+  (5) sorteio. O sorteio só acontece quando decide quem executa. Detalhes e
+  justificativa na seção "Desempate".
+- **Quantum**: específico de cada escalonador. RM e EDF decidem só pela
+  prioridade; quem quiser usar o quantum usa o campo `fila_desde` na prioridade
+  (Round Robin = `prioridade: fila_desde`). Ver a seção "Quantum".
 - **Ativação nova antes da anterior terminar** (atraso ou prazo > período): a
   nova fica acumulada e começa assim que a anterior termina.
 - **Perda de prazo**: marcada uma vez por ativação; a tarefa continua até
@@ -332,54 +537,45 @@ Mais exemplos em `exemplos/` e `tests/validos/`.
 - **Marcadores no Gantt**: cada evento fica na coluna do seu instante exato (a
   coluna t começa no instante t), no terminal e no SVG.
 - **Escalonador plugável**: um algoritmo é uma função que devolve a prioridade
-  nominal de uma tarefa (`include/sched.h`). Para incluir um novo, crie `src/sched/sched_xxx.c` e registre em
-  `src/sched/sched_registro.c`, ou compile como biblioteca dinâmica (`plugins/exemplo_fifo.c`,
-  `make plugins`) e carregue com `--plugin`.
+  nominal de uma tarefa (`sched.h`), e há três formas de incluir um novo: nativo,
+  plugin `.so`/`.dylib` ou arquivo `.txt` com a fórmula (seção "Como incluir um
+  novo escalonador"). A fórmula é compilada na carga e avaliada sem estado
+  próprio; uma falha (divisão por zero, estouro) para a simulação no tick, sem
+  inventar valor.
 - **Interface sem biblioteca**: a janela é desenhada pelo próprio programa
-  num vetor de pixels (`src/gfx/tela.c`, com uma fonte 8x16 embutida em
-  `src/gfx/fonte.c`), e um arquivo por sistema só abre a janela e copia a
-  imagem para ela: no Linux/WSL, `gfx_x11.c` fala o protocolo X11 direto no
-  socket do servidor gráfico (sem libX11); no Windows, `gfx_win32.c` usa a API
-  Win32; no macOS, `gfx_cocoa.c` usa o Cocoa pelo runtime do Objective-C, em C.
+  num vetor de pixels (`gfx.c`, com uma fonte 8x16 embutida), e um trecho
+  de `gfx_plataforma.c` por sistema só abre a janela e copia a
+  imagem para ela: no Linux/WSL, a seção `gfx_x11.c` fala o protocolo X11 direto no
+  socket do servidor gráfico (sem libX11); no Windows, a seção `gfx_win32.c` usa a API
+  Win32; no macOS, a seção `gfx_cocoa.c` usa o Cocoa pelo runtime do Objective-C, em C.
   Nada precisa ser instalado além do compilador. A interface de terminal (cores
   ANSI 24-bit) continua disponível com `--terminal`, e a imagem final é um SVG
   gerado à mão.
 
 ## Estrutura
 
+Todo o código fica na mesma pasta. Cada `.c`/`.h` junta os arquivos de um
+mesmo módulo da antiga versão em pastas (que está no histórico do git); dentro
+dele, cada trecho começa com um divisor que diz de qual arquivo original veio.
+
 ```
 projetoSO/
-├── src/
-│   ├── main.c              # argumentos de linha de comando e fluxo principal
-│   ├── core/
-│   │   ├── config.c        # leitura e validação do arquivo, valores padrão
-│   │   ├── edicao.c        # regras de edição de tarefas (comuns às duas interfaces)
-│   │   ├── sim.c           # relógio, ativações, ciclo do tick, eventos
-│   │   ├── history.c       # snapshots (avançar/retroceder) e rastro do Gantt
-│   │   └── util.c          # strings, números, terminal, gerador aleatório
-│   ├── sched/
-│   │   ├── sched_rm.c      # Rate Monotonic
-│   │   ├── sched_edf.c     # Earliest Deadline First
-│   │   ├── sched_tie.c     # cadeia de desempate comum
-│   │   └── sched_registro.c  # tabela de escalonadores e carga de plugins
-│   ├── gantt/
-│   │   ├── gantt_tui.c     # Gantt no terminal
-│   │   ├── gantt_gfx.c     # Gantt na janela gráfica
-│   │   └── gantt_svg.c     # exportação SVG
-│   ├── gfx/
-│   │   ├── tela.c          # desenho em memória (retângulos, linhas, texto)
-│   │   ├── fonte.c         # fonte bitmap 8x16 embutida
-│   │   ├── gfx_x11.c       # janela no Linux/WSL (protocolo X11 direto)
-│   │   ├── gfx_win32.c     # janela no Windows (Win32)
-│   │   └── gfx_cocoa.c     # janela no macOS (Cocoa)
-│   └── ui/
-│       ├── ui.c            # interface de terminal: configuração, passo a passo e completo
-│       └── ui_gui.c        # a mesma interface na janela gráfica
-├── include/                # cabeçalhos (config.h, task.h, sim.h, sched.h, gantt.h, ui.h, util.h, edicao.h, gfx.h, tela.h)
-├── plugins/                # escalonador de exemplo carregado com dlopen
-├── exemplos/               # figuras 2.5 e 2.6 do capítulo, várias CPUs, quantum
-├── tests/                  # configs válidas/inválidas e run_tests.sh (make test)
-├── docs/                   # enunciado do trabalho (PDF)
+├── main.c              # argumentos de linha de comando e fluxo principal
+├── config.h / config.c # arquivo de configuração e valores padrão;
+│                       #   funções auxiliares (antigo util.c/util.h)
+├── sim.h / sim.c       # relógio, ativações, ciclo do tick, eventos;
+│                       #   histórico (antigo history.c) e regras de edição (antigo edicao.c/edicao.h)
+├── sched.h / sched.c   # TCB (antigo task.h); RM, EDF, desempate comum e
+│                       #   tabela de escalonadores (antigos sched_rm/edf/tie/registro.c)
+├── gantt.h / gantt.c   # Gantt em SVG, no terminal e na janela (antigos gantt_svg/tui/gfx.c)
+├── gfx.h / gfx.c       # desenho em memória e fonte 8x16 embutida (antigos tela.c/tela.h e fonte.c)
+├── gfx_plataforma.c    # janela de cada sistema: X11, Win32 e Cocoa (antigos gfx_x11/win32/cocoa.c)
+├── ui.h / ui.c         # interface de terminal: configuração, passo a passo e completo
+├── ui_gui.c            # a mesma interface na janela gráfica
+├── exemplo_fifo.c      # escalonador de exemplo, compilado à parte como biblioteca dinâmica (make plugins)
+├── exemplos/           # arquivos de configuração das figuras do capítulo 2 e o escalonador LLF.txt
+├── tests/              # bateria de testes (make test): validos/, invalidos/ e run_tests.sh
+├── docs/               # enunciado do projeto (PDF)
 ├── Makefile
 └── README.md
 ```

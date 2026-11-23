@@ -27,12 +27,11 @@
 /* opendir/stat (navegador de arquivos) são POSIX; existem também no MinGW. */
 #define _POSIX_C_SOURCE 200809L
 
-#include "edicao.h"
+#include "sim.h"
 #include "gantt.h"
 #include "gfx.h"
-#include "tela.h"
 #include "ui.h"
-#include "util.h"
+#include "config.h"
 
 #include <ctype.h>
 #include <dirent.h>
@@ -653,34 +652,102 @@ static bool pedir_numero(const char *titulo, const char *explicacao, const char 
 
 static const char *regra_nao_negativo(int v) { return v >= 0 ? NULL : "o instante não pode ser negativo"; }
 
+/* ---- pedir o id de uma tarefa (texto) ---- */
+
+static const char *val_id_texto(Campo *c, int n, void *ctx, int *ce) {
+    (void)n;
+    (void)ctx;
+    *ce = 0;
+    char id[sizeof c[0].valor];
+    snprintf(id, sizeof id, "%s", c[0].valor);
+    return com_rotulo(&c[0], id_validar(str_trim(id)));
+}
+
+/* Como pedir_numero, mas o valor é texto: o id pode ser "3", "T3" ou "A".
+ * Só confere se é um id possível (id_validar); quem chama procura a tarefa
+ * e diz se ela não existe. */
+static bool pedir_id(const char *titulo, const char *explicacao, const char *rotulo, const char *atual,
+                     char *out, size_t tam) {
+    Campo c = {rotulo, "", false};
+    snprintf(c.valor, sizeof c.valor, "%s", atual);
+    Linhas intro = {0};
+    if (explicacao) lin_add(&intro, C_FRACO, false, "%s", explicacao);
+    int r = formulario(titulo, &intro, &c, 1, val_id_texto, NULL, NULL, 0);
+    lin_liberar(&intro);
+    if (r != FORM_OK) return false;
+    snprintf(out, tam, "%s", str_trim(c.valor));
+    return true;
+}
+
+/* Espaços que faltam para o id ocupar `largura` colunas, alinhado à direita
+ * como o %6d fazia (mesma regra de ui.c): conta caracteres, não bytes, e
+ * nunca dá negativo (printf("%*s") com largura negativa alinharia à
+ * esquerda). */
+static int folga(const char *id, int largura) {
+    int c = utf8_colunas(id);
+    return c < largura ? largura - c : 0;
+}
+
 /* ---- escolher o algoritmo ---- */
 
-/* Lista os escalonadores registrados (inclusive plugins) como botões.
- * Devolve o índice escolhido ou -1. */
-static int escolher_algoritmo(int atual) {
+static int carregar_escalonador(const char *cfg_caminho, char *msg, size_t tam);
+
+/* Lista os escalonadores registrados (inclusive os carregados) como botões.
+ * Quando não cabem todos na altura da janela (até MAX_ESCALONADORES), a
+ * lista rola com a roda do mouse ou as setas, em vez de passar da caixa.
+ * "Carregar escalonador..." traz um novo de um arquivo e já o escolhe.
+ * Devolve o índice escolhido ou -1; o que foi carregado é contado em `msg`. */
+static int escolher_algoritmo(int atual, const char *cfg_caminho, char *msg, size_t tam) {
     capturar_fundo();
+    int rol = 0;
     for (;;) {
         desenhar_fundo();
         int nalg = sched_quantidade();
+        int fixo = 34 + 20 + 20 + ALT_BOTAO + 14;   /* título, margens e a linha de botões */
+        int cabem = (T.h - 24 - fixo) / 36;
+        if (cabem < 1) cabem = 1;
+        int vis = nalg < cabem ? nalg : cabem;
+        if (rol > nalg - vis) rol = nalg - vis;
+        if (rol < 0) rol = 0;
         int x, y;
-        caixa_dialogo(620, 34 + 20 + nalg * 36 + 20 + ALT_BOTAO + 14, "Escolha o algoritmo de escalonamento", &x, &y);
+        caixa_dialogo(620, fixo + vis * 36, "Escolha o algoritmo de escalonamento", &x, &y);
         int w = 620 > T.w - 24 ? T.w - 24 : 620;
         int cy = y + 34 + 16;
-        for (int i = 0; i < nalg; i++) {
+        bool rola = nalg > vis;
+        area_rolagem(x, cy, w, vis * 36, &rol, nalg - vis);
+        for (int i = rol; i < rol + vis; i++) {
             const Escalonador *e = sched_obter(i);
             char rot[256];
             snprintf(rot, sizeof rot, "%s - %s%s", e->nome, e->descricao, i == atual ? "  (atual)" : "");
-            botao(x + 16, cy, w - 32, rot, 100 + i, true, i == atual ? B_PRIMARIO : B_NORMAL);
+            /* descrição comprida (a de um arquivo carregado pode ser qualquer
+             * texto): corta com "..." para não passar da borda do botão */
+            int bw = w - 32 - (rola ? 10 : 0);
+            if (texto_largura(rot) > bw - 16) snprintf(rot + texto_bytes_ate(rot, bw - 16 - 3 * FONTE_L), 4, "...");
+            botao(x + 16, cy, bw, rot, 100 + i, true, i == atual ? B_PRIMARIO : B_NORMAL);
             cy += 36;
         }
-        botao(x + w - 16 - largura_botao("Cancelar (Esc)"), y + 34 + 20 + nalg * 36 + 6, 0, "Cancelar (Esc)", 1, true, B_NORMAL);
+        if (rola) {   /* indicador da rolagem, como nos painéis */
+            int h = vis * 36 - 8, alt = h * vis / nalg;
+            if (alt < 16) alt = 16;
+            tela_ret(&T, x + w - 22, y + 34 + 16 + (h - alt) * rol / (nalg - vis), 4, alt, 0xB0B6BF);
+        }
+        int by = y + 34 + 20 + vis * 36 + 6;
+        botao(x + w - 16 - largura_botao("Cancelar (Esc)"), by, 0, "Cancelar (Esc)", 1, true, B_NORMAL);
+        botao(x + 16, by, 0, "Carregar escalonador...", 2, true, B_NORMAL);
         GfxEvento ev;
         esperar(&ev);
         if (fechar) return -1;
         if (ev.tipo == GE_TECLA && ev.tecla == GK_ESC) return -1;
+        if (ev.tipo == GE_TECLA && (ev.tecla == GK_BAIXO || ev.tecla == GK_CIMA)) rol += ev.tecla == GK_BAIXO ? 1 : -1;
+        if (ev.tipo == GE_RODA) rolar(&ev, 1);
         if (ev.tipo == GE_CLIQUE) {
             int id = alvo_em(ev.x, ev.y);
             if (id == 1) return -1;
+            if (id == 2) {
+                int i = carregar_escalonador(cfg_caminho, msg, tam);
+                if (i >= 0) return i;   /* carregou: já é o escolhido */
+                continue;               /* voltou sem carregar: a lista continua aberta */
+            }
             if (id >= 100 && id < 100 + nalg) return id - 100;
         }
     }
@@ -718,7 +785,7 @@ static void janela_texto(const char *titulo, const Linhas *L) {
 /* ---- formulário de tarefa (configuração e "+ tarefa" na simulação) ---- */
 
 typedef struct {
-    const int *ids;
+    const char *const *ids;   /* ids em uso (ponteiros para dentro das tarefas) */
     int nids, proprio;   /* proprio = índice da tarefa editada, -1 = nova */
     int min_ingresso;
     TarefaCfg res;       /* resultado já validado */
@@ -733,8 +800,14 @@ static const char *val_tarefa(Campo *c, int n, void *ctx, int *ce) {
     CtxTarefa *k = ctx;
     TarefaCfg *t = &k->res;
     const char *m;
-    if ((m = campo_int(&c[CT_ID], &t->id))) { *ce = CT_ID; return m; }
-    if ((m = valida_id(t->id, k->ids, k->nids, k->proprio))) { *ce = CT_ID; return com_rotulo(&c[CT_ID], m); }
+    /* O id é texto: qualquer coisa que id_validar aceite e que não repita o
+     * id de outra tarefa (id_iguais: "t1" repete "T1", "01" repete "1"). */
+    char id[sizeof c[CT_ID].valor];
+    snprintf(id, sizeof id, "%s", c[CT_ID].valor);
+    str_trim(id);
+    if ((m = id_validar(id))) { *ce = CT_ID; return com_rotulo(&c[CT_ID], m); }
+    if ((m = valida_id(id, k->ids, k->nids, k->proprio))) { *ce = CT_ID; return com_rotulo(&c[CT_ID], m); }
+    id_normalizar(t->id, sizeof t->id, id);
     char cor[64];
     snprintf(cor, sizeof cor, "%.63s", c[CT_COR].valor);
     if (!parse_cor(str_trim(cor), &t->cor)) {
@@ -760,13 +833,13 @@ static const char *val_tarefa(Campo *c, int n, void *ctx, int *ce) {
 
 /* Pede os dados de uma tarefa (nova ou editada a partir de `t`). Em caso de
  * OK, preenche *t; os eventos (texto) vão para `eventos`. */
-static bool form_tarefa(const char *titulo, TarefaCfg *t, const int *ids, int nids, int proprio, int min_ingresso,
-                        char *eventos, size_t tam_ev) {
+static bool form_tarefa(const char *titulo, TarefaCfg *t, const char *const *ids, int nids, int proprio,
+                        int min_ingresso, char *eventos, size_t tam_ev) {
     Campo c[CT_N] = {
         {"id", "", false}, {"cor (RGB hex)", "", false}, {"ingresso", "", false}, {"duração (C)", "", false},
         {"período (P)", "", false}, {"prazo (D)", "", false}, {"eventos", "", false},
     };
-    snprintf(c[CT_ID].valor, sizeof c[0].valor, "%d", t->id);
+    snprintf(c[CT_ID].valor, sizeof c[0].valor, "%s", t->id);
     snprintf(c[CT_COR].valor, sizeof c[0].valor, "%06X", t->cor);
     snprintf(c[CT_INGRESSO].valor, sizeof c[0].valor, "%d", t->ingresso);
     snprintf(c[CT_DURACAO].valor, sizeof c[0].valor, "%d", t->duracao);
@@ -786,13 +859,6 @@ static bool form_tarefa(const char *titulo, TarefaCfg *t, const int *ids, int ni
     k.res.eventos = eventos;
     *t = k.res;
     return true;
-}
-
-static int proximo_id(const int *ids, int n) {
-    int m = 0;
-    for (int i = 0; i < n; i++)
-        if (ids[i] >= m) m = ids[i] + 1;
-    return m;
 }
 
 /* Texto da utilização e do teste de escalonabilidade (como no terminal). */
@@ -950,56 +1016,78 @@ static void pasta_acima(char *dir, size_t tam) {
     else *ult = '\0';
 }
 
-/* Tela para escolher o arquivo de configuração. Clique numa pasta entra
- * nela; clique num arquivo preenche o caminho; clicar de novo no mesmo
- * arquivo (ou Enter / Carregar) carrega. Erros do arquivo aparecem todos
- * de uma vez, com o motivo (req. 3.3). Devolve true se carregou. */
-static bool tela_arquivo(Config *cfg, bool pode_voltar, const Config *falhou) {
+/* O navegador de arquivos (com os atalhos de pendrive) serve para duas
+ * coisas: abrir o arquivo de configuração e carregar um escalonador. O que
+ * muda entre as duas é só o texto da tela e o que fazer com o arquivo
+ * escolhido, então isso vem nesta struct em vez de duplicar a tela. */
+typedef struct {
+    const char *titulo;     /* cabeçalho da tela                                   */
+    const char *rotulo;     /* título do painel do caminho                         */
+    const char *formato;    /* uma linha sobre o formato do arquivo                */
+    const char *exemplo;    /* exemplo de caminho (mensagem de caminho vazio)      */
+    /* Usa o arquivo: true se deu certo; senão escreve os problemas em `msgs`. */
+    bool (*usar)(void *ctx, const char *caminho, Linhas *msgs);
+    void *ctx;
+} Navegador;
+
+/* Tela de escolha de arquivo. Clique numa pasta entra nela; clique num
+ * arquivo preenche o caminho; clicar de novo no mesmo arquivo (ou Enter /
+ * Carregar) usa o arquivo. Os problemas aparecem todos de uma vez, com o
+ * motivo (req. 3.3). `pasta` (NULL = a de sempre) é onde a lista começa;
+ * `caminho` preenche o campo; `msgs` vem com as mensagens iniciais e
+ * termina com as últimas. Devolve true se o arquivo foi usado. */
+static bool navegar(const Navegador *nv, bool pode_voltar, const char *pasta, const char *caminho, Linhas *msgs) {
     enum { A_CARREGAR = 1, A_VOLTAR, A_ACIMA, A_CAMPO, A_PENDRIVES, A_PESSOAL, A_ATUAL, A_ITEM = 1000 };
     char dir[1024];
     char atual[1024];
     pasta_atual(atual, sizeof atual);
-    if (e_pasta("exemplos")) juntar(dir, sizeof dir, atual, "exemplos");
-    else snprintf(dir, sizeof dir, "%s", atual);
+    if (pasta && *pasta && strcmp(pasta, ".") != 0) {
+        /* a pasta do arquivo de configuração: absoluta ou relativa à atual */
+        char p[1024];
+        snprintf(p, sizeof p, "%s", pasta);
+        barras_normais(p);
+        if (p[0] == '/' || (p[0] && p[1] == ':')) snprintf(dir, sizeof dir, "%s", p);
+        else juntar(dir, sizeof dir, atual, p);
+    } else if (pasta) {
+        snprintf(dir, sizeof dir, "%s", atual);
+    } else if (e_pasta("exemplos")) {
+        juntar(dir, sizeof dir, atual, "exemplos");
+    } else {
+        snprintf(dir, sizeof dir, "%s", atual);
+    }
     int nent = 0;
     Entrada *ent = listar_pasta(dir, &nent);
     Campo campo = {"Caminho", "", false};
     int cursor = 0;
     bool tudo = false;
-    Linhas msgs = {0};
-    if (falhou) {
-        snprintf(campo.valor, sizeof campo.valor, "%s", falhou->caminho ? falhou->caminho : "");
-        lin_add(&msgs, C_ERRO, true, "O arquivo informado tem problemas. Corrija-o e carregue de novo, ou escolha outro.");
-        for (int i = 0; i < falhou->avisos.n; i++) lin_add(&msgs, C_AVISO, false, "aviso: %s", falhou->avisos.itens[i]);
-        for (int i = 0; i < falhou->erros.n; i++) lin_add(&msgs, C_ERRO, false, "erro: %s", falhou->erros.itens[i]);
-    }
+    snprintf(campo.valor, sizeof campo.valor, "%s", caminho ? caminho : "");
     cursor = (int)strlen(campo.valor);
     int rol_lista = 0, rol_msgs = 0;
     bool ok = false;
 
     while (!fechar) {
         novo_quadro();
-        int y = cabecalho("Abrir arquivo de configuração", "Simulador de escalonamento de tempo real (RM / EDF) - Projeto A");
+        int y = cabecalho(nv->titulo, "Simulador de escalonamento de tempo real (RM / EDF) - Projeto A");
         int x = 16, w = T.w - 32;
         y += 12;
 
         /* caminho + carregar */
         painel(x, y, w, 92);
-        titulo_painel(x, y, "Caminho do arquivo (absoluto ou relativo, qualquer pasta ou disco):");
+        titulo_painel(x, y, nv->rotulo);
         int wc = largura_botao("Carregar (Enter)");
         caixa_texto(x + 12, y + 34, w - 36 - wc, &campo, true, cursor, tudo, false);
         registrar(x + 12, y + 34, w - 36 - wc, ALT_BOTAO, A_CAMPO);
         botao(x + w - 12 - wc, y + 34, wc, "Carregar (Enter)", A_CARREGAR, true, B_PRIMARIO);
-        tela_texto(&T, x + 12, y + 68, "Formato: algoritmo;quantum;qtde_cpus na 1ª linha e id;cor;ingresso;duracao;periodo;prazo;eventos nas seguintes.", C_FRACO);
+        tela_texto(&T, x + 12, y + 68, nv->formato, C_FRACO);
         y += 92 + 12;
 
         /* mensagens (erros do último arquivo) */
         int h_msgs = 0;
-        if (msgs.n) {
-            int nv = linhas_visuais(&msgs, w - 24);
-            h_msgs = (nv < 8 ? nv : 8) * LINHA + 20;
+        if (msgs->n) {
+            int nlv = linhas_visuais(msgs, w - 24);
+            h_msgs = (nlv < 8 ? nlv : 8) * LINHA + 20;
             painel(x, y, w, h_msgs);
-            desenhar_linhas(x + 12, y + 10, w - 24, h_msgs - 20, &msgs, &rol_msgs);
+            desenhar_linhas(x + 12, y + 10, w - 24, h_msgs - 20, msgs, &rol_msgs);
             y += h_msgs + 12;
         }
 
@@ -1106,34 +1194,103 @@ static bool tela_arquivo(Config *cfg, bool pode_voltar, const Config *falhou) {
                 p[l - 1] = '\0';
                 p++;
             }
-            lin_liberar(&msgs);
+            lin_liberar(msgs);
             rol_msgs = 0;
             if (!*p) {
-                lin_add(&msgs, C_ERRO, false, "erro: informe um caminho (absoluto ou relativo), ex.: exemplos/fig2_5_rm.txt");
+                lin_add(msgs, C_ERRO, false, "erro: informe um caminho (absoluto ou relativo), ex.: %s", nv->exemplo);
                 continue;
             }
-            Config novo;
-            if (config_carregar(p, &novo)) {
-                config_liberar(cfg);
-                *cfg = novo;
+            if (nv->usar(nv->ctx, p, msgs)) {
                 ok = true;
                 break;
             }
-            lin_add(&msgs, C_ERRO, true, "Não foi possível usar '%s'. Corrija o arquivo e carregue de novo, ou escolha outro.", p);
-            for (int i = 0; i < novo.avisos.n; i++) lin_add(&msgs, C_AVISO, false, "aviso: %s", novo.avisos.itens[i]);
-            for (int i = 0; i < novo.erros.n; i++) lin_add(&msgs, C_ERRO, false, "erro: %s", novo.erros.itens[i]);
-            config_liberar(&novo);
         }
     }
     free(ent);
+    return ok;
+}
+
+/* Navegador no modo "arquivo de configuração". */
+static bool usar_config(void *ctx, const char *p, Linhas *msgs) {
+    Config *cfg = ctx;
+    Config novo;
+    if (config_carregar(p, &novo)) {
+        config_liberar(cfg);
+        *cfg = novo;
+        return true;
+    }
+    lin_add(msgs, C_ERRO, true, "Não foi possível usar '%s'. Corrija o arquivo e carregue de novo, ou escolha outro.", p);
+    for (int i = 0; i < novo.avisos.n; i++) lin_add(msgs, C_AVISO, false, "aviso: %s", novo.avisos.itens[i]);
+    for (int i = 0; i < novo.erros.n; i++) lin_add(msgs, C_ERRO, false, "erro: %s", novo.erros.itens[i]);
+    config_liberar(&novo);
+    return false;
+}
+
+/* Tela para escolher o arquivo de configuração. Devolve true se carregou. */
+static bool tela_arquivo(Config *cfg, bool pode_voltar, const Config *falhou) {
+    Navegador nv = {"Abrir arquivo de configuração", "Caminho do arquivo (absoluto ou relativo, qualquer pasta ou disco):",
+                    "Formato: algoritmo;quantum;qtde_cpus na 1ª linha e id;cor;ingresso;duracao;periodo;prazo;eventos nas seguintes.",
+                    "exemplos/fig2_5_rm.txt", usar_config, cfg};
+    Linhas msgs = {0};
+    if (falhou) {
+        lin_add(&msgs, C_ERRO, true, "O arquivo informado tem problemas. Corrija-o e carregue de novo, ou escolha outro.");
+        for (int i = 0; i < falhou->avisos.n; i++) lin_add(&msgs, C_AVISO, false, "aviso: %s", falhou->avisos.itens[i]);
+        for (int i = 0; i < falhou->erros.n; i++) lin_add(&msgs, C_ERRO, false, "erro: %s", falhou->erros.itens[i]);
+    }
+    bool ok = navegar(&nv, pode_voltar, NULL, falhou && falhou->caminho ? falhou->caminho : "", &msgs);
     lin_liberar(&msgs);
     return ok;
 }
 
+/* Navegador no modo "escalonador": carrega o arquivo (.txt com a fórmula,
+ * .so ou .dylib; sched.c decide pela extensão). Se der errado, mostra TODOS
+ * os problemas do arquivo e a tabela de algoritmos fica como estava. */
+typedef struct { int indice; char caminho[512]; } CtxEscalonador;
+
+static bool usar_escalonador(void *ctx, const char *p, Linhas *msgs) {
+    CtxEscalonador *k = ctx;
+    char erro[4096];
+    int i = sched_carregar_arquivo(p, erro, sizeof erro);
+    if (i >= 0) {
+        k->indice = i;
+        snprintf(k->caminho, sizeof k->caminho, "%s", p);
+        return true;
+    }
+    lin_add(msgs, C_ERRO, true, "Não foi possível carregar o escalonador de '%s'. Corrija o arquivo e carregue de novo, ou escolha outro.", p);
+    for (char *lin = erro, *fim; lin && *lin; lin = fim ? fim + 1 : NULL) {
+        fim = strchr(lin, '\n');
+        if (fim) *fim = '\0';
+        lin_add(msgs, C_ERRO, false, "erro: %s", lin);
+    }
+    return false;
+}
+
+/* Botão "Carregar escalonador...": abre o navegador na pasta do arquivo de
+ * configuração (no cenário do professor, o próprio pendrive). Devolve o
+ * índice do carregado (-1 = voltou sem carregar) e conta em `msg`. */
+static int carregar_escalonador(const char *cfg_caminho, char *msg, size_t tam) {
+    CtxEscalonador k = {-1, ""};
+    Navegador nv = {"Carregar escalonador", "Arquivo do escalonador (.txt com a fórmula da prioridade, .so ou .dylib):",
+                    "Formato do .txt: uma linha 'nome: LLF' e uma 'prioridade: deadline_abs - agora - restante' (veja o README).",
+                    "/Volumes/PENDRIVE/LLF.txt", usar_escalonador, &k};
+    char pasta[1024] = ".";
+    if (cfg_caminho) caminho_pasta(cfg_caminho, pasta, sizeof pasta);
+    Linhas msgs = {0};
+    navegar(&nv, true, pasta, "", &msgs);
+    lin_liberar(&msgs);
+    if (k.indice >= 0) fmsg(msg, tam, "Escalonador %s carregado de %s.", sched_obter(k.indice)->nome, k.caminho);
+    return k.indice;
+}
+
+
+
 /* ============================================== 4. configuração */
 
-static int *ids_cfg(const Config *cfg) {
-    int *ids = xmalloc((size_t)(cfg->n + 1) * sizeof(int));
+/* Os ids da configuração, para valida_id/id_sugerir: ponteiros para dentro
+ * de `cfg` (não copiam o texto); valem enquanto o vetor de tarefas não for
+ * realocado, e quem chama libera só o vetor de ponteiros. */
+static const char **ids_cfg(const Config *cfg) {
+    const char **ids = xmalloc((size_t)(cfg->n + 1) * sizeof *ids);
     for (int i = 0; i < cfg->n; i++) ids[i] = cfg->tarefas[i].id;
     return ids;
 }
@@ -1145,7 +1302,7 @@ static const char *regra_cpus(int v) { return config_validar_cpus(v); }
  * permite alterar antes de simular. Devolve 'a' (passo a passo), 'b'
  * (completa) ou 0 (sair). */
 static int tela_config(Config *cfg) {
-    enum { C_ALG = 1, C_QUANTUM, C_CPUS, C_NOVA, C_ARQUIVO, C_PASSO, C_COMPLETA, C_SAIR,
+    enum { C_ALG = 1, C_QUANTUM, C_CPUS, C_NOVA, C_ARQUIVO, C_PASSO, C_COMPLETA, C_SAIR, C_CARREGAR_ESC,
            C_EDITAR = 1000, C_REMOVER = 2000 };
     char msg[600] = "";
     int rol = 0, rol_avisos = 0;
@@ -1169,8 +1326,10 @@ static int tela_config(Config *cfg) {
         titulo_painel(x, y, "Sistema");
         char lin[300];
         int wb = largura_botao("Alterar algoritmo"), xb = x + w - 12 - wb;
+        int wl = largura_botao("Carregar escalonador..."), xl = xb - 8 - wl;
         snprintf(lin, sizeof lin, "Algoritmo: %s - %s", e ? e->nome : "?", e ? e->descricao : "");
-        texto_cortado(x + 24, y + 40, xb - x - 36, lin, C_TEXTO);
+        texto_cortado(x + 24, y + 40, xl - x - 36, lin, C_TEXTO);
+        botao(xl, y + 34, wl, "Carregar escalonador...", C_CARREGAR_ESC, true, B_NORMAL);
         snprintf(lin, sizeof lin, "Quantum: %d tick(s)", cfg->quantum);
         tela_texto(&T, x + 24, y + 72, lin, C_TEXTO);
         snprintf(lin, sizeof lin, "Quantidade de CPUs: %d (de 1 a %d)", cfg->ncpus, MAX_CPUS);
@@ -1200,9 +1359,19 @@ static int tela_config(Config *cfg) {
         titulo_painel(x, y, lin);
         int wn = largura_botao("+ Nova tarefa");
         botao(x + w - 12 - wn, y + 6, wn, "+ Nova tarefa", C_NOVA, true, B_NORMAL);
-        /* colunas da tabela */
+        /* colunas da tabela. A do id tem 60 px; se algum id (texto) não
+         * couber, ela cresce e empurra as outras, em vez de o id ficar por
+         * cima da cor. Com ids curtos (números) nada muda. */
         static const char *const cab[] = {"id", "cor", "ingresso", "duração", "período", "prazo", "eventos"};
-        static const int col[] = {24, 84, 190, 280, 370, 460, 540};
+        int col[] = {24, 84, 190, 280, 370, 460, 540};
+        int larg_id = 0;
+        for (int i = 0; i < cfg->n; i++) {
+            int l = texto_largura(cfg->tarefas[i].id) + 1 + 12;   /* +1 do negrito, +12 de espaço */
+            if (l > larg_id) larg_id = l;
+        }
+        int extra = larg_id - (col[1] - col[0]);
+        if (extra > 0)
+            for (int c = 1; c < 7; c++) col[c] += extra;
         int ty = y + 40;
         for (int c = 0; c < 7; c++) tela_texto_negrito(&T, x + col[c], ty, cab[c], C_FRACO);
         tela_ret(&T, x + 12, ty + 20, w - 24, 1, C_BORDA);
@@ -1218,7 +1387,7 @@ static int tela_config(Config *cfg) {
             int ry = ly + j * 30;
             if (dentro(mx, my, x + 6, ry, w - 12, 30)) tela_ret(&T, x + 6, ry, w - 12, 30, 0xF9FAFB);
             char v[64];
-            snprintf(v, sizeof v, "%d", t->id);
+            snprintf(v, sizeof v, "%s", t->id);
             tela_texto_negrito(&T, x + col[0], ry + 7, v, t->cor);
             tela_ret(&T, x + col[1], ry + 7, 18, 16, t->cor);
             tela_moldura(&T, x + col[1], ry + 7, 18, 16, 0x555555);
@@ -1275,8 +1444,19 @@ static int tela_config(Config *cfg) {
         case C_SAIR: return 0;
         case C_ARQUIVO: tela_arquivo(cfg, true, NULL); rol = 0; break;
         case C_ALG: {
-            int a = escolher_algoritmo(cfg->algoritmo);
+            int a = escolher_algoritmo(cfg->algoritmo, cfg->caminho, msg, sizeof msg);
             if (a >= 0) cfg->algoritmo = a;
+            break;
+        }
+        case C_CARREGAR_ESC: {
+            /* o carregado já fica escolhido: quem traz o algoritmo no
+             * pendrive quer simular com ele */
+            int a = carregar_escalonador(cfg->caminho, msg, sizeof msg);
+            if (a >= 0) {
+                cfg->algoritmo = a;
+                size_t l = strlen(msg);
+                snprintf(msg + l, sizeof msg - l, " A simulação vai usar o %s.", sched_obter(a)->nome);
+            }
             break;
         }
         case C_QUANTUM:
@@ -1291,30 +1471,33 @@ static int tela_config(Config *cfg) {
             break;
         }
         case C_NOVA: {
-            int *ids = ids_cfg(cfg);
-            TarefaCfg t = {proximo_id(ids, cfg->n), config_cor_padrao(cfg->n), PADRAO_INGRESSO,
+            const char **ids = ids_cfg(cfg);
+            TarefaCfg t = {"", config_cor_padrao(cfg->n), PADRAO_INGRESSO,
                            PADRAO_DURACAO, PADRAO_PERIODO, PADRAO_PERIODO, NULL, 0, NULL, 0};
+            id_sugerir(ids, cfg->n, t.id, sizeof t.id);
             char ev_txt[512];
             if (form_tarefa("Nova tarefa", &t, ids, cfg->n, -1, 0, ev_txt, sizeof ev_txt)) {
                 config_adicionar(cfg, &t);
-                fmsg(msg, sizeof msg, "Tarefa %d adicionada.", t.id);
+                fmsg(msg, sizeof msg, "Tarefa %s adicionada.", t.id);
             }
             free(ids);
             break;
         }
         default:
             if (acao >= C_REMOVER && acao < C_REMOVER + cfg->n) {
-                int i = acao - C_REMOVER, id = cfg->tarefas[i].id;
+                int i = acao - C_REMOVER;
+                char id[ID_MAX];   /* cópia: a tarefa some do vetor logo abaixo */
+                snprintf(id, sizeof id, "%s", cfg->tarefas[i].id);
                 config_liberar_tarefa(&cfg->tarefas[i]);
                 memmove(&cfg->tarefas[i], &cfg->tarefas[i + 1], (size_t)(cfg->n - i - 1) * sizeof(TarefaCfg));
                 cfg->n--;
-                fmsg(msg, sizeof msg, "Tarefa %d removida.", id);
+                fmsg(msg, sizeof msg, "Tarefa %s removida.", id);
             } else if (acao >= C_EDITAR && acao < C_EDITAR + cfg->n) {
                 int i = acao - C_EDITAR;
-                int *ids = ids_cfg(cfg);
+                const char **ids = ids_cfg(cfg);
                 TarefaCfg t = cfg->tarefas[i];
-                char ev_txt[512], tit[64];
-                snprintf(tit, sizeof tit, "Editar a tarefa %d", t.id);
+                char ev_txt[512], tit[ID_MAX + 32];
+                snprintf(tit, sizeof tit, "Editar a tarefa %s", t.id);
                 if (form_tarefa(tit, &t, ids, cfg->n, i, 0, ev_txt, sizeof ev_txt)) {
                     /* `t` divide os ponteiros de eventos com a original: copia
                      * os campos numéricos e troca a lista pelo texto novo. */
@@ -1324,7 +1507,7 @@ static int tela_config(Config *cfg) {
                     t.nev = dst->nev;
                     *dst = t;
                     config_definir_eventos(dst, ev_txt);
-                    fmsg(msg, sizeof msg, "Tarefa %d alterada.", t.id);
+                    fmsg(msg, sizeof msg, "Tarefa %s alterada.", t.id);
                 }
                 free(ids);
             }
@@ -1395,12 +1578,16 @@ static void linhas_tick(const Sessao *z, const Simulador *vis, Linhas *L) {
         return;
     }
     lin_add(L, C_TEXTO, true, "Tick %d (do instante %d ao %d)%s", t, t, t + 1, t == vis->ncols - 1 ? " - o último executado" : "");
+    /* rótulos como no Gantt: T1 se todos os ids são inteiros, senão o id cru */
+    bool todos_inteiros = sim_ids_inteiros(e);
+    char rot[ID_MAX + 8];
     for (int c = 0; c < vis->ncpus_col[t]; c++) {
         int quem = -1;
         for (int i = 0; i < e->n; i++)
             if (sim_cpu_celula(vis, t, i) == c) quem = i;
         if (quem >= 0) {
-            lin_add(L, C_TEXTO, false, "CPU%d: tarefa T%d", c, e->tarefas[quem].id);
+            id_rotulo(e->tarefas[quem].id, todos_inteiros, rot, sizeof rot);
+            lin_add(L, C_TEXTO, false, "CPU%d: tarefa %s", c, rot);
             L->v[L->n - 1].amostra = e->tarefas[quem].cor;
         } else {
             lin_add(L, C_FRACO, false, "CPU%d: desligada (nenhuma tarefa pronta)", c);
@@ -1409,8 +1596,9 @@ static void linhas_tick(const Sessao *z, const Simulador *vis, Linhas *L) {
     char prontas[200] = "";
     for (int i = 0; i < e->n; i++)
         if (sim_celula(vis, t, i) == G_PRONTA) {
-            char id[16];
-            snprintf(id, sizeof id, " T%d", e->tarefas[i].id);
+            char id[sizeof rot + 1];   /* " " + rótulo */
+            id_rotulo(e->tarefas[i].id, todos_inteiros, rot, sizeof rot);
+            snprintf(id, sizeof id, " %s", rot);
             if (strlen(prontas) + strlen(id) < sizeof prontas) strcat(prontas, id);
         }
     lin_add(L, C_TEXTO, false, "Prontas esperando CPU:%s", *prontas ? prontas : " (nenhuma)");
@@ -1420,8 +1608,9 @@ static void linhas_tick(const Sessao *z, const Simulador *vis, Linhas *L) {
         if (ev->tick != t) continue;
         if (!algum) lin_add(L, C_TEXTO, true, "Eventos:");
         algum = true;
+        id_rotulo(e->tarefas[ev->tarefa].id, todos_inteiros, rot, sizeof rot);
         lin_add(L, ev->tipo == EV_PRAZO_PERDIDO ? C_ERRO : C_TEXTO, ev->tipo == EV_PRAZO_PERDIDO,
-                "  instante %d: T%d %s%s", ev->instante, e->tarefas[ev->tarefa].id, evento_nome(ev->tipo),
+                "  instante %d: %s %s%s", ev->instante, rot, evento_nome(ev->tipo),
                 ev->tipo == EV_PRAZO_PERDIDO ? "!" : "");
     }
     if (!algum) lin_add(L, C_FRACO, false, "Nenhum evento neste tick.");
@@ -1431,7 +1620,7 @@ static void linhas_tick(const Sessao *z, const Simulador *vis, Linhas *L) {
 /* Painel direito com uma tarefa escolhida: o TCB (comando `t` do terminal). */
 static void linhas_tarefa(const Sessao *z, int i, Linhas *L) {
     const TCB *k = &z->s.atual.tarefas[i];
-    lin_add(L, k->cor, true, "Tarefa %d (TCB) no instante %d", k->id, z->s.atual.t);
+    lin_add(L, k->cor, true, "Tarefa %s (TCB) no instante %d", k->id, z->s.atual.t);
     L->v[L->n - 1].amostra = k->cor;
     lin_add(L, C_TEXTO, false, "Parâmetros: cor %06X | ingresso %d | duração %d | período %d | prazo %d", k->cor,
             k->ingresso, k->duracao, k->periodo, k->prazo);
@@ -1479,7 +1668,7 @@ static void linhas_sistema(const Sessao *z, Linhas *L) {
             snprintf(dl, sizeof dl, "%d", k->deadline_abs);
         }
         if (k->cpu >= 0) snprintf(cpu, sizeof cpu, "%d", k->cpu);
-        lin_add(L, k->deadlines_perdidos ? C_ERRO : C_TEXTO, false, "%6d  %-27s %3d/%-2d %8s %8s %4s %6d", k->id,
+        lin_add(L, k->deadlines_perdidos ? C_ERRO : C_TEXTO, false, "%*s%s  %-27s %3d/%-2d %8s %8s %4s %6d", folga(k->id, 6), "", k->id,
                 estado_descricao(k), k->concluidas, MAX_ATIVACOES, rest, dl, cpu, k->deadlines_perdidos);
         L->v[L->n - 1].amostra = k->cor;
     }
@@ -1499,7 +1688,7 @@ static void linhas_estatisticas(const Simulador *s, Linhas *L) {
         perdidos += k->deadlines_perdidos;
         char term[16] = "-";
         if (k->termino >= 0) snprintf(term, sizeof term, "%d", k->termino);
-        lin_add(L, C_TEXTO, false, "%6d %4d/%-2d %7d %7d %7d %8.1f %8d %6d %7d %7s", k->id, k->concluidas, MAX_ATIVACOES,
+        lin_add(L, C_TEXTO, false, "%*s%s %4d/%-2d %7d %7d %7d %8.1f %8d %6d %7d %7s", folga(k->id, 6), "", k->id, k->concluidas, MAX_ATIVACOES,
                 k->deadlines_perdidos, k->ticks_exec, k->ticks_espera,
                 k->concluidas ? (double)k->resposta_soma / k->concluidas : 0.0, k->resposta_max, k->preempcoes,
                 k->sorteios, term);
@@ -1558,7 +1747,7 @@ static void ajuda(bool completo) {
 
 /* "Editar tarefa" na simulação (req. 3.4): todos os campos de uma vez,
  * mais Suspender/Retomar e Encerrar. As regras são as do terminal
- * (editar_tarefa em ui.c), via edicao.c. */
+ * (editar_tarefa em ui.c), via sim.c (seção edicao.c). */
 typedef struct { const TCB *k; int t; int v[6]; unsigned cor; } CtxEdicao;
 
 enum { E_COR, E_DURACAO, E_PERIODO, E_PRAZO, E_INGRESSO, E_RESTANTE, E_N };
@@ -1618,8 +1807,8 @@ static void editar_na_simulacao(Sessao *z, int i) {
     BotaoExtra ex[2] = {{suspensa_pelo_usuario(k) ? "Retomar" : "Suspender", E_SUSPENDER, B_NORMAL},
                         {"Encerrar agora", E_ENCERRAR, B_PERIGO}};
     CtxEdicao ctx = {k, t, {0}, k->cor};
-    char tit[64];
-    snprintf(tit, sizeof tit, "Editar a tarefa %d (instante %d)", k->id, t);
+    char tit[ID_MAX + 48];
+    snprintf(tit, sizeof tit, "Editar a tarefa %s (instante %d)", k->id, t);
     int r = formulario(tit, &intro, c, E_N, val_edicao, &ctx, ex, terminou ? 0 : 2);
     lin_liberar(&intro);
     if (r == FORM_CANCELAR) return;
@@ -1628,9 +1817,9 @@ static void editar_na_simulacao(Sessao *z, int i) {
         edicao_alternar_suspensao(k);
         sim_concluir_edicao(s);
         if (suspensa_pelo_usuario(k))
-            fmsg(z->msg, sizeof z->msg, "Tarefa %d suspensa: não disputa CPU até ser retomada (ativações continuam chegando e acumulando).", k->id);
+            fmsg(z->msg, sizeof z->msg, "Tarefa %s suspensa: não disputa CPU até ser retomada (ativações continuam chegando e acumulando).", k->id);
         else
-            fmsg(z->msg, sizeof z->msg, "Tarefa %d retomada (%s).", k->id, estado_descricao(k));
+            fmsg(z->msg, sizeof z->msg, "Tarefa %s retomada (%s).", k->id, estado_descricao(k));
         z->exportado = false;
         return;
     }
@@ -1638,7 +1827,7 @@ static void editar_na_simulacao(Sessao *z, int i) {
         sim_preparar_edicao(s);
         edicao_encerrar(k, t);
         sim_concluir_edicao(s);
-        fmsg(z->msg, sizeof z->msg, "Tarefa %d encerrada no instante %d.", k->id, t);
+        fmsg(z->msg, sizeof z->msg, "Tarefa %s encerrada no instante %d.", k->id, t);
         z->exportado = false;
         return;
     }
@@ -1652,7 +1841,7 @@ static void editar_na_simulacao(Sessao *z, int i) {
     bool alguma = false;
     for (int j = 0; j < E_N; j++) alguma |= muda[j];
     if (!alguma) {
-        fmsg(z->msg, sizeof z->msg, "Nenhuma alteração na tarefa %d.", k->id);
+        fmsg(z->msg, sizeof z->msg, "Nenhuma alteração na tarefa %s.", k->id);
         return;
     }
     sim_preparar_edicao(s);
@@ -1668,7 +1857,7 @@ static void editar_na_simulacao(Sessao *z, int i) {
 #undef FEITO
     sim_concluir_edicao(s);
     if (n && n < sizeof feito) feito[n - 1] = '.';
-    fmsg(z->msg, sizeof z->msg, "Tarefa %d alterada no instante %d:%s", k->id, t, feito);
+    fmsg(z->msg, sizeof z->msg, "Tarefa %s alterada no instante %d:%s", k->id, t, feito);
     z->exportado = false;
 }
 
@@ -1683,6 +1872,8 @@ static bool acao_simulacao(Sessao *z, int a) {
         int k = a == S_AVANCAR ? 1 : 10, feitos = 0;
         while (feitos < k && sim_avancar(s)) feitos++;
         if (feitos < k && s->atual.fim) fmsg(z->msg, sizeof z->msg, "erro: a simulação já terminou (instante %d)", s->atual.t);
+        else if (feitos < k && *s->erro)   /* o escalonador falhou: o tick foi desfeito */
+            fmsg(z->msg, sizeof z->msg, "erro: %s. Volte no tempo ou troque o algoritmo para continuar.", s->erro);
         z->seguir = true;
         z->tick_insp = -1;
         break;
@@ -1709,7 +1900,10 @@ static bool acao_simulacao(Sessao *z, int a) {
         int v;
         if (pedir_numero("Ir para o instante", "Avança ou volta a simulação até o instante informado.", "instante",
                          s->atual.t, regra_nao_negativo, &v)) {
-            if (sim_ir_para(s, v) != v) fmsg(z->msg, sizeof z->msg, "A simulação termina no instante %d; parou lá.", s->atual.t);
+            if (sim_ir_para(s, v) != v) {
+                if (*s->erro) fmsg(z->msg, sizeof z->msg, "erro: parou no instante %d: %s", s->atual.t, s->erro);
+                else fmsg(z->msg, sizeof z->msg, "A simulação termina no instante %d; parou lá.", s->atual.t);
+            }
             z->seguir = true;
             z->tick_insp = -1;
         }
@@ -1721,13 +1915,14 @@ static bool acao_simulacao(Sessao *z, int a) {
          * depois e o usuário voltou no tempo (a foto tem menos tarefas). */
         if (i >= s->atual.n) i = z->v.sel = -1;
         if (i < 0) {
-            int id;
-            if (!pedir_numero("Editar tarefa", "Dica: clicar numa tarefa no gráfico já a escolhe.", "id da tarefa",
-                              s->atual.n ? s->atual.tarefas[0].id : 0, NULL, &id))
+            /* o id é texto; a sugestão é o id da primeira tarefa */
+            char id[ID_MAX];
+            if (!pedir_id("Editar tarefa", "Dica: clicar numa tarefa no gráfico já a escolhe.", "id da tarefa",
+                          s->atual.n ? s->atual.tarefas[0].id : "", id, sizeof id))
                 break;
-            i = sim_indice(&s->atual, id);
+            i = sim_indice(&s->atual, id);   /* índice, -1 = não existe */
             if (i < 0) {
-                fmsg(z->msg, sizeof z->msg, "erro: não existe tarefa com id %d neste instante", id);
+                fmsg(z->msg, sizeof z->msg, "erro: não existe tarefa com id %s neste instante", id);
                 break;
             }
             z->v.sel = i;
@@ -1737,10 +1932,13 @@ static bool acao_simulacao(Sessao *z, int a) {
     }
     case S_NOVA: {
         Estado *e = &s->atual;
-        int *ids = xmalloc((size_t)(e->n + 1) * sizeof(int));
+        /* ids das tarefas que existem NESTE instante (ponteiros para dentro
+         * dos TCBs; o vetor só é realocado depois do free abaixo) */
+        const char **ids = xmalloc((size_t)(e->n + 1) * sizeof *ids);
         for (int i = 0; i < e->n; i++) ids[i] = e->tarefas[i].id;
-        TarefaCfg t = {proximo_id(ids, e->n), config_cor_padrao(e->n), e->t, PADRAO_DURACAO, PADRAO_PERIODO,
+        TarefaCfg t = {"", config_cor_padrao(e->n), e->t, PADRAO_DURACAO, PADRAO_PERIODO,
                        PADRAO_PERIODO, NULL, 0, NULL, 0};
+        id_sugerir(ids, e->n, t.id, sizeof t.id);
         char ev[512];
         bool ok = form_tarefa("Nova tarefa durante a simulação", &t, ids, e->n, -1, e->t, ev, sizeof ev);
         free(ids);
@@ -1752,17 +1950,21 @@ static bool acao_simulacao(Sessao *z, int a) {
         sim_adicionar_tarefa(s, &z->extras.tarefas[z->extras.n - 1]);
         sim_concluir_edicao(s);
         z->exportado = false;
-        fmsg(z->msg, sizeof z->msg, "Tarefa %d adicionada; chega no instante %d.", t.id, t.ingresso);
+        fmsg(z->msg, sizeof z->msg, "Tarefa %s adicionada; chega no instante %d.", t.id, t.ingresso);
         break;
     }
     case S_ALG: {
-        int a2 = escolher_algoritmo(s->atual.alg);
+        char carregou[700] = "";
+        int a2 = escolher_algoritmo(s->atual.alg, z->cfg->caminho, carregou, sizeof carregou);
         if (a2 >= 0 && a2 != s->atual.alg) {
             sim_preparar_edicao(s);
             s->atual.alg = a2;
             sim_concluir_edicao(s);
             z->exportado = false;
-            fmsg(z->msg, sizeof z->msg, "Algoritmo trocado para %s a partir do instante %d.", sched_obter(a2)->nome, s->atual.t);
+            fmsg(z->msg, sizeof z->msg, "%s%sAlgoritmo trocado para %s a partir do instante %d.", carregou,
+                 *carregou ? " " : "", sched_obter(a2)->nome, s->atual.t);
+        } else if (*carregou) {
+            snprintf(z->msg, sizeof z->msg, "%s", carregou);
         }
         break;
     }

@@ -1,0 +1,5 @@
+# comentário: começa com # e não tem ponto e vírgula
+RM;2;1
+#1;E74C3C;0;1;5;5
+Tarefa 2;3498DB;0;2;10;10
+A&B;2ECC71;0;2;20;20

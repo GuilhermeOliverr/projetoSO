@@ -94,15 +94,16 @@ roda exemplos/quantum_respeita_prazo.txt > "$TMP/out"
 grep -q 'CPU0: \[0,4)T1 \[4,8)T2' "$TMP/out" && grep -q 'Nenhum prazo perdido' "$TMP/out" \
     && ok "fim de quantum não passa por cima do critério 2 (prazo)" || falha "quantum x critério 2"
 
-echo "== Desempate: critério 2 usa o deadline absoluto"
+echo "== Desempate: critério 2 usa o prazo relativo"
 # Em t = 12 (T3 acabou), T1 (chegou em 0, prazo 20) e T2 (chegou em 10, prazo
-# 10) têm o mesmo deadline absoluto (20): o critério 2 empata e decide o
-# critério 3 (ingresso 0 < 10), então T1 vem primeiro. Com o prazo relativo
-# seria T2 (10 < 20).
+# 10) têm o mesmo deadline absoluto (20), que é a prioridade no EDF. O
+# critério 2 compara o prazo relativo (campo 'prazo', ver README "Desempate"):
+# 10 < 20, então T2 vem primeiro. Pelo deadline absoluto empataria e o
+# critério 3 (ingresso) daria T1.
 roda tests/validos/20_desempate_prazo_absoluto.txt > "$TMP/out"
-grep -q 'CPU0: \[0,12)T3 \[12,15)T1 \[15,18)T2' "$TMP/out" \
-    && ok "deadlines absolutos iguais caem no critério 3: vence o menor ingresso (T1)" \
-    || falha "critério 2 (deadline absoluto)" "$(grep 'CPU0:' "$TMP/out" | head -1 | cut -c1-100)"
+grep -q 'CPU0: \[0,12)T3 \[12,15)T2 \[15,18)T1' "$TMP/out" \
+    && ok "mesmo deadline absoluto: o critério 2 (menor prazo relativo) escolhe T2" \
+    || falha "critério 2 (prazo relativo)" "$(grep 'CPU0:' "$TMP/out" | head -1 | cut -c1-100)"
 
 echo "== Desempate: critério 1 quando a próxima ativação chega no fim da anterior"
 # T1 e T2 iguais (C = 5, P = 10) numa CPU. Quem executou de 5 a 10 termina a
@@ -153,12 +154,59 @@ grep -q 'estado: suspensa: pelo usuário' "$TMP/out" && grep -q 'suspensa [1-9][
 grep -q 'Tarefa 1 retomada (pronta)' "$TMP/out" && ok "retomar com ativação pendente volta para pronta" \
     || falha "retomada de SUSP_USUARIO" "$(grep 'retomada' "$TMP/out")"
 
+echo "== Id em texto (número ou texto; sem diferenciar maiúsculas)"
+# Linhas das tarefas no Gantt do terminal, de cima para baixo (1ª faixa).
+linhas_gantt() { grep '│' "$1" | grep -v '^CPU' | awk '{print $1}' | head -"$2" | tr '\n' ' '; }
+# Ordem do eixo Y (menor id embaixo): texto em ordem natural, T2 antes de T10.
+roda tests/validos/21_ids_texto_ordem_natural.txt > "$TMP/out"
+[ "$(linhas_gantt "$TMP/out" 4)" = "T10 T2 T1 T0 " ] && ok "ordem natural: T10, T2, T1, T0 de cima para baixo" \
+    || falha "ordem natural dos ids" "$(linhas_gantt "$TMP/out" 4)"
+grep -E -q '\)TT|^  t=[0-9]+ TT' "$TMP/out" && falha "rótulo não pode virar TT1" \
+    || ok "ids de texto sem o prefixo T na linha do tempo e nos eventos (nada de TT1)"
+# Inteiros antes de texto; 0 e T0 são tarefas diferentes e com rótulos diferentes.
+roda tests/validos/22_ids_misturados_0_e_T0.txt > "$TMP/out"
+[ "$(linhas_gantt "$TMP/out" 6)" = "T1 T0 A 10 2 0 " ] && ok "misturados: 0 < 2 < 10 < A < T0 < T1, rótulos crus" \
+    || falha "ordem dos ids misturados" "$(linhas_gantt "$TMP/out" 6)"
+roda tests/validos/25_ids_negativos.txt > "$TMP/out"
+[ "$(linhas_gantt "$TMP/out" 3)" = "T1 T0 T-1 " ] && ok "inteiros pelo valor: -1 embaixo, rótulos T<id>" \
+    || falha "ordem dos ids negativos" "$(linhas_gantt "$TMP/out" 3)"
+# '#1;...' é tarefa (tem ';'); '# comentário' sem ';' é ignorado. A&B escapado no SVG.
+roda tests/validos/23_id_com_hash_espaco_e_e_comercial.txt > "$TMP/out"
+grep -q '#1' "$TMP/out" && grep -q 'Tarefa 2' "$TMP/out" && ok "id '#1' vira tarefa; id com espaço no meio" \
+    || falha "id '#1' / 'Tarefa 2'"
+grep -q 'A&amp;B' "$TMP/g.svg" && ! grep -q 'A&B' "$TMP/g.svg" && ok "id 'A&B' escapado no SVG" || falha "escape do id no SVG"
+# Latin-1 (Bloco de Notas em ANSI): aceito, e o SVG continua UTF-8 válido.
+roda tests/validos/24_id_latin1.txt > "$TMP/out"
+iconv -f UTF-8 -t UTF-8 "$TMP/g.svg" > /dev/null 2>&1 && ok "id em Latin-1 aceito e SVG em UTF-8 válido" \
+    || falha "SVG com id em Latin-1 não é UTF-8 válido"
+# Repetidos: T1/t1, 01/1 e T01/T1 são o mesmo id.
+for f in 17_id_repetido_maiusculas 18_id_repetido_zero_a_esquerda 19_id_repetido_texto_numero; do
+    $BIN tests/invalidos/$f.txt --validar --sem-cor 2>&1 | grep -q 'id repetido' && ok "$f: id repetido" \
+        || falha "$f deveria acusar id repetido"
+done
+# Sugestão de id novo: maior + 1 (inteiros) ou o próximo do prefixo (T0..T10 -> T11).
+printf 'n\n\n\n\n\n\n\n\nq\n' | $BIN exemplos/fig2_5_rm.txt --terminal --sem-cor > "$TMP/out" 2>&1
+grep -q 'id \[4\]' "$TMP/out" && ok "sugestão com ids 1, 2, 3: 4" || falha "sugestão de id inteiro"
+printf 'n\n\n\n\n\n\n\n\nq\n' | $BIN tests/validos/21_ids_texto_ordem_natural.txt --terminal --sem-cor > "$TMP/out" 2>&1
+grep -q 'id \[T11\]' "$TMP/out" && ok "sugestão com T0, T1, T2, T10: T11" || falha "sugestão de id texto"
+# Comandos com id em texto: t t0 acha T0; t 0 e t T0 são tarefas diferentes.
+printf 't t0\n\nq\n' | $BIN tests/validos/21_ids_texto_ordem_natural.txt --modo passo --sem-cor > "$TMP/out" 2>&1
+grep -q 'Tarefa T0 (TCB)' "$TMP/out" && ok "'t t0' acha a tarefa T0" || falha "busca sem diferenciar maiúsculas"
+printf 't 0\n\nt T0\n\nq\n' | $BIN tests/validos/22_ids_misturados_0_e_T0.txt --modo passo --sem-cor > "$TMP/out" 2>&1
+grep -q 'Tarefa 0 (TCB)' "$TMP/out" && grep -q 'Tarefa T0 (TCB)' "$TMP/out" && ok "'t 0' e 't T0' são tarefas diferentes" \
+    || falha "'t 0' / 't T0'"
+# Tarefa de id texto adicionada na simulação some ao voltar para antes dela.
+printf 'n 5\n+\nX\n\n\n\n\n\n\nt X\n\np 3\nt X\nq\n' | $BIN exemplos/fig2_5_rm.txt --modo passo --sem-cor > "$TMP/out" 2>&1
+grep -q 'Tarefa X adicionada' "$TMP/out" && grep -q 'Tarefa X (TCB)' "$TMP/out" \
+    && grep -q 'não existe tarefa com id X neste instante' "$TMP/out" \
+    && ok "tarefa 'X' adicionada no passo a passo e desfeita ao voltar no tempo" || falha "adicionar tarefa de id texto"
+
 echo "== Plugin dinâmico"
-if [ -f plugins/exemplo_fifo.so ]; then
+if [ -f exemplo_fifo.so ]; then
     printf 'FIFO;2;1\n1;E74C3C;0;3;10;10\n2;3498DB;1;3;10;10\n' > "$TMP/fifo.txt"
-    if $BIN "$TMP/fifo.txt" --plugin plugins/exemplo_fifo.so --modo completo --texto --sem-cor \
+    if $BIN "$TMP/fifo.txt" --plugin exemplo_fifo.so --modo completo --texto --sem-cor \
         --saida "$TMP/g.svg" > "$TMP/out" 2>&1 && grep -q 'CPU0: \[0,3)T1 \[3,6)T2' "$TMP/out"; then
-        ok "escalonador FIFO carregado de plugins/exemplo_fifo.so"
+        ok "escalonador FIFO carregado de exemplo_fifo.so"
     else
         falha "plugin" "$(head -3 "$TMP/out")"
     fi

@@ -1,0 +1,6 @@
+# Critério 1 quando a ativação termina no instante em que chega a próxima
+# (RM, 1 CPU, T1 e T2 com C = 5 e P = 10): quem executava de 5 a 10
+# continua de 10 a 15, sem sorteio. Só o empate de t = 0 vai para sorteio.
+RM;2;1
+1;E74C3C;0;5;10;10
+2;3498DB;0;5;10;10

@@ -2,11 +2,12 @@
 # -O2 é a otimização pedida no steering e -g mantém os símbolos de depuração
 # (valgrind/gdb mostram linha e função)
 CC = gcc
-CFLAGS = -Wall -Wextra -pedantic -std=c11 -O2 -g -Iinclude
+CFLAGS = -Wall -Wextra -pedantic -std=c11 -O2 -g
 
-# Pega todos os .c de src/ (e subpastas), sem listar um por um
-SRC = $(wildcard src/*.c src/*/*.c)
-HDR = $(wildcard include/*.h)
+# Pega todos os .c da pasta, sem listar um por um (menos exemplo_fifo.c, que
+# é o plugin e vira uma biblioteca dinâmica à parte)
+SRC = $(filter-out exemplo_fifo.c,$(wildcard *.c))
+HDR = $(wildcard *.h)
 TARGET = projetoSO
 
 # Bibliotecas de cada sistema. Todas já vêm com o sistema (e o compilador):
@@ -42,16 +43,16 @@ $(TARGET): $(SRC) $(HDR)
 	$(CC) $(CFLAGS) -o $@ $(SRC) $(LDLIBS)
 
 # Plugin de exemplo (escalonador numa biblioteca dinâmica)
-plugins: plugins/exemplo_fifo.so
+plugins: exemplo_fifo.so
 
-plugins/exemplo_fifo.so: plugins/exemplo_fifo.c include/sched.h include/task.h
+exemplo_fifo.so: exemplo_fifo.c sched.h
 	$(CC) $(CFLAGS) -fPIC -shared -o $@ $<
 
-# Bateria de testes: arquivos válidos/inválidos e casos do capítulo 2
+# Bateria de testes (pastas tests/ e exemplos/)
 test: $(TARGET) plugins
 	sh tests/run_tests.sh
 
 clean:
-	rm -rf $(TARGET) $(TARGET).exe $(TARGET).dSYM plugins/*.so *_gantt.svg
+	rm -rf $(TARGET) $(TARGET).exe $(TARGET).dSYM *.so *_gantt.svg
 
 .PHONY: all clean plugins test
