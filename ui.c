@@ -572,7 +572,7 @@ static void detalhes_tarefa(const Simulador *s, int i) {
     if (k->restante > 0) {
         printf("  ativação atual: nº %d, chegou em %d, deadline em %d, faltam %d tick(s)%s\n",
                k->concluidas + 1, k->chegada_atual, k->deadline_abs, k->restante,
-               (k->perdas & (1u << k->concluidas)) ? " — PRAZO PERDIDO" : "");
+               ativacao_atual_perdeu_prazo(k) ? " — PRAZO PERDIDO" : "");
         if (k->liberadas - k->concluidas > 1)
             printf("  ativações acumuladas esperando: %d\n", k->liberadas - k->concluidas - 1);
     }

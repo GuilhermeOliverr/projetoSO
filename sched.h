@@ -92,7 +92,14 @@ typedef struct {
     int restante;              // Quantidade de ticks de CPU que ainda faltam ser executados para concluir a ativação atual
     int chegada_atual;         // Instante do relógio em que a ativação atualmente em andamento foi liberada
     int deadline_abs;          // Instante limite absoluto do relógio para o término da ativação atual (chegada_atual + prazo)
-    unsigned perdas;           // Máscara/contador de bits indicando quais ativações estouraram o prazo
+    /* perdas_ate: as ativações pendentes de número MENOR que este já foram
+     * marcadas como "prazo perdido". Basta um número (e não um bit por
+     * ativação) porque as chegadas são crescentes e o prazo relativo é o
+     * mesmo para todas: entre as ativações pendentes, as que já venceram
+     * formam sempre um começo da fila. Antes era uma máscara de 32 bits, que
+     * limitava a 32 ativações; uma tarefa esporádica (Projeto B) pode ter
+     * qualquer número de ocorrências. */
+    int perdas_ate;
     int cpu;                   // Índice do processador em que a tarefa está executando no tick atual (-1 se não estiver na CPU)
     int quantum_usado;         // Quantidade de ticks contínuos que a tarefa já executou no quantum corrente
     /* fila_desde: instante em que a tarefa entrou no FIM da fila de prontas.
@@ -128,6 +135,8 @@ const char *estado_nome(EstadoTarefa e);    // Retorna uma string com o nome leg
 const char *estado_descricao(const TCB *k);    // Retorna a descrição detalhada do estado incluindo o motivo da suspensão quando aplicável
 
 bool suspensa_pelo_usuario(const TCB *k);    // Retorna true se a tarefa foi suspensa manualmente pelo usuário (SUSP_USUARIO), impedindo que chegue a progredir sozinha
+
+bool ativacao_atual_perdeu_prazo(const TCB *k);    // true se a ativação em andamento (a de número `concluidas`) já foi marcada como prazo perdido
 
 /* ===========================================================================
  * Seção sched.h (originalmente include/sched.h)

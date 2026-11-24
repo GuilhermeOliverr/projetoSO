@@ -79,6 +79,12 @@ bool suspensa_pelo_usuario(const TCB *k) {
     return k->estado == T_SUSPENSA && k->motivo == SUSP_USUARIO;
 }
 
+/* A ativação em andamento é a de número `concluidas`; ela já perdeu o prazo
+ * se perdas_ate passou dela (ver perdas_ate em sched.h). */
+bool ativacao_atual_perdeu_prazo(const TCB *k) {
+    return k->restante > 0 && k->perdas_ate > k->concluidas;
+}
+
 /* Nome de cada tipo de evento, para as listas de eventos do passo a passo. */
 const char *evento_nome(TipoEvento t) {
     switch (t) {
@@ -470,14 +476,17 @@ static bool executar_tick(Simulador *s) {
          * instante exato do deadline (req. 2.2), e não só quando a ativação
          * finalmente começa a executar. */
         if (k->estado == T_TERMINADA) continue;
-        for (int j = k->concluidas; j < k->liberadas; j++) {
-            /* `perdas` é um número usado como vetor de bits: o bit j fica
-             * ligado quando a ativação j já foi marcada como perdida, para
-             * não marcar duas vezes. (1u << j) cria um número com só o bit j. */
-            unsigned bit = 1u << j;
+        /* Começa na primeira pendente que ainda não foi marcada (as de
+         * número menor que perdas_ate já foram; ver sched.h), para não
+         * marcar a mesma ativação duas vezes. As chegadas são crescentes e o
+         * prazo relativo é o mesmo para todas, então os deadlines também
+         * crescem: na primeira que ainda não venceu, as seguintes também não
+         * venceram, e o laço pode parar. */
+        int j0 = k->perdas_ate > k->concluidas ? k->perdas_ate : k->concluidas;
+        for (int j = j0; j < k->liberadas; j++) {
             int deadline = k->chegadas[j] + k->prazo;
-            if ((k->perdas & bit) || deadline > t + 1) continue;
-            k->perdas |= bit;
+            if (deadline > t + 1) break;
+            k->perdas_ate = j + 1;
             k->deadlines_perdidos++;
             /* deadline < t+1 só acontece se o prazo foi reduzido por edição
              * para um instante que já passou: aí a perda é detectada agora. */
