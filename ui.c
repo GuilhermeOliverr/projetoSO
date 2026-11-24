@@ -277,10 +277,11 @@ void ui_imprimir_config(const Config *cfg) {
     printf("algoritmo %s (%s) | quantum %d | %d CPU(s) (máx. %d)\n", e ? e->nome : "?",
            e ? e->descricao : "", cfg->quantum, cfg->ncpus, MAX_CPUS);
     term_negrito();
-    printf("Tarefas (%d periódicas):\n", cfg->n);
+    printf("Tarefas (%d):\n", cfg->n);
     term_reset();
     printf("  %6s  %-7s %8s %8s %8s %8s  %s\n", "id", "cor", "ingresso", "duração", "período", "prazo", "eventos");
     double u = 0;
+    int nu = 0;   /* quantas entram na utilização (o n do limite do RM) */
     for (int i = 0; i < cfg->n; i++) {
         const TarefaCfg *t = &cfg->tarefas[i];
         printf("  %*s%s  ", folga(t->id, 6), "", t->id);
@@ -289,9 +290,13 @@ void ui_imprimir_config(const Config *cfg) {
         term_reset();
         printf("%06X %7d %8d %8d %8d  %s\n", t->cor, t->ingresso, t->duracao, t->periodo, t->prazo,
                t->eventos && *t->eventos ? t->eventos : "-");
-        u += (double)t->duracao / t->periodo;
+        double p = utilizacao_parcela(t->tipo, t->servidor, t->duracao, t->periodo);
+        if (p >= 0) {
+            u += p;
+            nu++;
+        }
     }
-    imprimir_utilizacao(cfg->n, u, cfg->algoritmo);
+    imprimir_utilizacao(nu, u, cfg->algoritmo);
 }
 
 /* Posição da tarefa de id `id` na configuração: devolve o ÍNDICE (-1 se
@@ -347,7 +352,7 @@ bool ui_menu_config(Config *cfg) {
         bool tem_arg = *arg != '\0';
         switch (cmd) {
         case '\0':   /* Enter sem nada = iniciar (se houver tarefas) */
-            if (cfg->n == 0) { ui_erro("não há tarefas periódicas para simular; use [n] ou [l]"); break; }
+            if (cfg->n == 0) { ui_erro("não há tarefas para simular; use [n] ou [l]"); break; }
             return true;
         case 'a': {
             int a = pedir_algoritmo(cfg->algoritmo);
@@ -395,7 +400,8 @@ bool ui_menu_config(Config *cfg) {
             const char **ids = ids_cfg(cfg);
             CtxIds c = {ids, cfg->n, -1};
             TarefaCfg t = {"", config_cor_padrao(cfg->n), PADRAO_INGRESSO,
-                           PADRAO_DURACAO, PADRAO_PERIODO, PADRAO_PERIODO, NULL, 0, NULL, 0};
+                           PADRAO_DURACAO, PADRAO_PERIODO, PADRAO_PERIODO, NULL, 0, NULL, 0,
+                           TIPO_PERIODICA, SERV_BS, NULL, 0};
             id_sugerir(ids, cfg->n, t.id, sizeof t.id);
             char ev[512];
             printf("Nova tarefa (Enter aceita o valor sugerido):\n");
@@ -474,7 +480,9 @@ static void estatisticas(const Simulador *s) {
     for (int i = 0; i < e->n; i++) {
         const TCB *k = &e->tarefas[i];
         perdidos += k->deadlines_perdidos;
-        printf("  %*s%s %4d/%-2d %7d %7d %7d %8.1f %8d %6d %7d ", folga(k->id, 6), "", k->id, k->concluidas, tcb_total_ativacoes(k),
+        char ativ[32];
+        tcb_ativacoes_txt(k, ativ, sizeof ativ);
+        printf("  %*s%s %7s %7d %7d %7d %8.1f %8d %6d %7d ", folga(k->id, 6), "", k->id, ativ,
                k->deadlines_perdidos, k->ticks_exec, k->ticks_espera,
                k->concluidas ? (double)k->resposta_soma / k->concluidas : 0.0, k->resposta_max,
                k->preempcoes, k->sorteios);
@@ -525,7 +533,7 @@ static bool exportar(const Simulador *s, const Config *cfg, const char *caminho,
  * SVG. Devolve o código de saída do programa. */
 int ui_execucao_completa(const Config *cfg, const OpcoesUI *op) {
     if (cfg->n == 0) {
-        ui_erro("não há tarefas periódicas para simular");
+        ui_erro("não há tarefas para simular");
         return 1;
     }
     Simulador s;
@@ -568,7 +576,8 @@ static void detalhes_tarefa(const Simulador *s, int i) {
     printf("  estado: %s\n", estado_descricao(k));
     if (k->restante > 0)
         printf("  prioridade (menor = mais prioritária): nominal %d, ativa %d\n", k->prio_nominal, k->prio_ativa);
-    printf("  ativações: %d chegaram, %d concluídas (de %d)\n", k->liberadas, k->concluidas, tcb_total_ativacoes(k));
+    if (!tcb_eh_servidor(k))
+        printf("  ativações: %d chegaram, %d concluídas (de %d)\n", k->liberadas, k->concluidas, tcb_total_ativacoes(k));
     if (k->restante > 0) {
         printf("  ativação atual: nº %d, chegou em %d, deadline em %d, faltam %d tick(s)%s\n",
                k->concluidas + 1, k->chegada_atual, k->deadline_abs, k->restante,
@@ -576,7 +585,7 @@ static void detalhes_tarefa(const Simulador *s, int i) {
         if (k->liberadas - k->concluidas > 1)
             printf("  ativações acumuladas esperando: %d\n", k->liberadas - k->concluidas - 1);
     }
-    if (k->liberadas < tcb_total_ativacoes(k) && k->estado != T_TERMINADA)
+    if (!tcb_eh_servidor(k) && k->liberadas < tcb_total_ativacoes(k) && k->estado != T_TERMINADA)
         printf("  próxima chegada: instante %d\n", k->proxima_chegada);
     printf("  CPU no último tick: %s", k->cpu >= 0 ? "" : "nenhuma\n");
     if (k->cpu >= 0) printf("CPU%d (quantum usado %d/%d)\n", k->cpu, k->quantum_usado, s->atual.quantum);
@@ -595,12 +604,16 @@ static void estado_sistema(const Simulador *s) {
     term_reset();
     printf("  algoritmo %s | quantum %d | %d CPU(s) | %s\n", esc->nome, e->quantum, e->ncpus,
            e->fim ? "simulação concluída" : sim_bloqueado(e) ? "bloqueada (todas suspensas)" : "em andamento");
-    imprimir_utilizacao(e->n, sim_utilizacao(e), e->alg);
+    int nu;
+    double u = sim_utilizacao(e, &nu);
+    imprimir_utilizacao(nu, u, e->alg);
     printf("\n  %6s %-27s %7s %8s %8s %5s %7s\n", "id", "estado", "ativ.", "restante", "deadline", "CPU", "prazos");
     int *ordem = gantt_ordem(e);
     for (int r = e->n - 1; r >= 0; r--) {
         const TCB *k = &e->tarefas[ordem[r]];
-        printf("  %*s%s %-27s %4d/%-2d ", folga(k->id, 6), "", k->id, estado_descricao(k), k->concluidas, tcb_total_ativacoes(k));
+        char ativ[32];
+        tcb_ativacoes_txt(k, ativ, sizeof ativ);
+        printf("  %*s%s %-27s %7s ", folga(k->id, 6), "", k->id, estado_descricao(k), ativ);
         if (k->restante > 0) printf("%8d %8d ", k->restante, k->deadline_abs);
         else printf("%8s %8s ", "-", "-");
         if (k->cpu >= 0) printf("%5d ", k->cpu);
@@ -786,7 +799,8 @@ static void adicionar_tarefa(Simulador *s, Config *extras, char *msg, size_t tam
     for (int i = 0; i < e->n; i++) ids[i] = e->tarefas[i].id;
     CtxIds c = {ids, e->n, -1};
     TarefaCfg t = {"", config_cor_padrao(e->n), e->t, PADRAO_DURACAO,
-                   PADRAO_PERIODO, PADRAO_PERIODO, NULL, 0, NULL, 0};
+                   PADRAO_PERIODO, PADRAO_PERIODO, NULL, 0, NULL, 0,
+                   TIPO_PERIODICA, SERV_BS, NULL, 0};
     id_sugerir(ids, e->n, t.id, sizeof t.id);
     char ev[512];
     int min = e->t;

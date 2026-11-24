@@ -95,7 +95,7 @@ int  sim_ir_para(Simulador *s, int t);    // Desloca o relógio da simulação d
 
 const char *sim_rodar_ate_fim(Simulador *s);    // Executa a simulação continuamente em laço até que todas as tarefas terminem; devolve o motivo se parar antes (limite de ticks, todas suspensas, falha do escalonador)
 
-bool sim_bloqueado(const Estado *e);    // Verifica se o sistema está em deadlock ou bloqueado sem tarefas prontas executáveis
+bool sim_bloqueado(const Estado *e);    // true se nenhuma tarefa restante progride sozinha: todas suspensas pelo usuário, ou aperiódicas sem servidor disponível
 
 void sim_preparar_edicao(Simulador *s);    // Prepara o simulador para edições dinâmicas, preparando o histórico para possíveis truncamentos
 void sim_concluir_edicao(Simulador *s);    // Finaliza o processo de edição dinâmica e trunca o histórico futuro a partir do tick editado
@@ -111,7 +111,8 @@ int sim_indice(const Estado *e, const char *id);    // Busca o índice da tarefa
 
 bool sim_ids_inteiros(const Estado *e);    // true se todos os ids do estado atual são inteiros (rótulos "T<id>"; ver id_rotulo)
 
-double sim_utilizacao(const Estado *e);    // Calcula a taxa de utilização total do processador U = soma(Duração / Período) para o conjunto de tarefas
+double utilizacao_parcela(TipoTarefa tipo, TipoServidor servidor, int duracao, int periodo);    // C/P da tarefa na utilização, ou -1 se ela não entra na soma (aperiódica, esporádica, Background Server)
+double sim_utilizacao(const Estado *e, int *n);    // Utilização total U = soma das parcelas (utilizacao_parcela); em 'n' (pode ser NULL) vai quantas tarefas entraram na soma
 double sim_limite_rm(int n);    // Calcula o limite teórico de escalonabilidade do teste de Liu & Layland para RM: n*(2^(1/n) - 1)
 
 void estado_copiar(Estado *dst, const Estado *src);    // Copia profundamente o estado 'src' para o estado 'dst' (alocando novos TCBs)

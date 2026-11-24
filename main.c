@@ -197,7 +197,7 @@ int main(int argc, char **argv) {
     }
     if (m == 'a') {
         if (cfg.n == 0) {
-            fprintf(stderr, "erro: não há tarefas periódicas para simular\n");
+            fprintf(stderr, "erro: não há tarefas para simular\n");
             ret = 1;
         } else {
             ui_passo_a_passo(&cfg, &op);

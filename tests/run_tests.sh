@@ -53,10 +53,11 @@ done
 roda() { $BIN "$1" --modo completo --texto --sem-cor --saida "$TMP/g.svg" ${2:+"$@"} 2>&1; }
 
 echo "== Avisos"
+# Sem nenhum servidor no arquivo, a aperiódica nunca executaria (req. B 1.1).
 roda tests/validos/08_com_aperiodica.txt > "$TMP/out"
-grep -q 'aperiódica (periodo = 0) e foi ignorada' "$TMP/out" && ok "aperiódica ignorada com aviso" \
-    || falha "aperiódica ignorada com aviso"
-grep -q 'T2' "$TMP/out" && falha "aperiódica não deveria aparecer no Gantt" || ok "aperiódica fora do Gantt"
+grep -q 'aperiódica (periodo = 0) e foi ignorada: não há nenhum servidor' "$TMP/out" && ok "aperiódica sem servidor ignorada com aviso" \
+    || falha "aperiódica sem servidor ignorada com aviso"
+grep -q 'T2' "$TMP/out" && falha "aperiódica sem servidor não deveria aparecer no Gantt" || ok "aperiódica sem servidor fora do Gantt"
 
 echo "== Figura 2.5 (tabela 2.1 com RM)"
 roda exemplos/fig2_5_rm.txt > "$TMP/out"

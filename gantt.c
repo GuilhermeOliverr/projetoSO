@@ -199,7 +199,7 @@ bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char
     fputs("</text>\n", f);
     fprintf(f, "<text class=\"sub\" x=\"16\" y=\"46\">Algoritmo %s · %d CPU(s) · quantum %d · "
                "U = %.3f · %d tick(s) simulados · prazos perdidos: %d%s</text>\n",
-            esc_alg ? esc_alg->nome : "?", e->ncpus, e->quantum, sim_utilizacao(e), T, perdidos,
+            esc_alg ? esc_alg->nome : "?", e->ncpus, e->quantum, sim_utilizacao(e, NULL), T, perdidos,
             e->fim ? "" : " · (simulação incompleta)");
 
     /* grade vertical e eixo. `passo` = de quantos em quantos ticks vai um
@@ -510,12 +510,14 @@ static void rotulo_alinhado(const char *rot, int largura) {
 /* Quem estava em cada CPU em cada tick: ocup[(t-ini)*MAX_CPUS + c].
  * O rastro guarda "qual CPU usou a tarefa i"; para desenhar as linhas das
  * CPUs precisamos do inverso, "qual tarefa usou a CPU c". Aqui invertemos.
- * -1 = nenhuma (CPU desligada naquele tick). */
+ * -1 = nenhuma (CPU desligada naquele tick). Uma aperiódica executa na CPU
+ * do servidor que a atende: a CPU fica com o servidor, que é quem a disputou. */
 static int *ocupacao(const Simulador *s, int ini, int fim) {
     int *oc = xmalloc((size_t)(fim - ini) * MAX_CPUS * sizeof(int));
     for (int t = ini; t < fim; t++) {
         for (int c = 0; c < MAX_CPUS; c++) oc[(t - ini) * MAX_CPUS + c] = -1;
         for (int i = 0; i < s->atual.n; i++) {
+            if (tcb_eh_atendida(&s->atual.tarefas[i])) continue;
             int c = sim_cpu_celula(s, t, i);
             if (c >= 0 && c < MAX_CPUS) oc[(t - ini) * MAX_CPUS + c] = i;
         }

@@ -10,6 +10,7 @@
 #include "sim.h"
 #include "config.h"
 
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -37,11 +38,16 @@
  *   5. t++ e grava o snapshot.
  *
  * Vocabulário que aparece o tempo todo:
- *   - tarefa: um programa periódico (ex.: "rode 20 ticks a cada 100").
+ *   - tarefa: um programa periódico (ex.: "rode 20 ticks a cada 100"), ou,
+ *     no Projeto B, aperiódico/esporádico (chega nos instantes da sua
+ *     lista_eventos) ou um servidor (executa as aperiódicas);
  *   - ativação (job): cada vez que a tarefa "acorda" para trabalhar. Uma
  *     tarefa periódica tem uma ativação por período; no Projeto A são 10.
  *   - TCB: a ficha da tarefa (sched.h, seção task.h). Tudo sobre ela está lá.
  *   - tick t: o intervalo de tempo [t, t+1).
+ *   - fila de aperiódicas: as aperiódicas e esporádicas que chegaram e
+ *     esperam um servidor. Elas nunca disputam a CPU diretamente (req. B
+ *     1.1): o servidor disputa, e executa a aperiódica que tirou da fila.
  */
 
 /* =========================================================================
@@ -66,8 +72,9 @@ const char *estado_nome(EstadoTarefa e) {
 const char *estado_descricao(const TCB *k) {
     if (k->estado != T_SUSPENSA) return estado_nome(k->estado);
     switch (k->motivo) {
-    case SUSP_PERIODO: return "suspensa: próximo período";
+    case SUSP_PERIODO: return tcb_eh_atendida(k) ? "suspensa: próxima ocorrência" : "suspensa: próximo período";
     case SUSP_USUARIO: return "suspensa: pelo usuário";
+    case SUSP_SEM_TRABALHO: return "suspensa: sem aperiódica na fila";
     default: return "suspensa";
     }
 }
@@ -85,19 +92,59 @@ bool ativacao_atual_perdeu_prazo(const TCB *k) {
     return k->restante > 0 && k->perdas_ate > k->concluidas;
 }
 
+bool tcb_eh_servidor(const TCB *k) {
+    return k->tipo == TIPO_SERVIDOR;
+}
+
+bool tcb_eh_atendida(const TCB *k) {
+    return k->tipo == TIPO_APERIODICA || k->tipo == TIPO_ESPORADICA;
+}
+
+const char *tipo_nome(const TCB *k) {
+    switch (k->tipo) {
+    case TIPO_APERIODICA: return "aperiódica";
+    case TIPO_ESPORADICA: return "esporádica";
+    case TIPO_SERVIDOR:
+        switch (k->servidor) {
+        case SERV_BS: return "servidor BS";
+        }
+        return "servidor";
+    default: return "periódica";
+    }
+}
+
 /* Quantas ativações a tarefa tem ao todo. Toda consulta ao "fim" da tarefa
- * passa por aqui, e não pela constante, porque o total depende do tipo da
- * tarefa: a periódica "termina" após MAX_ATIVACOES (req. 4.4). */
+ * passa por aqui, e não pela constante, porque o total depende do tipo:
+ *   - periódica: MAX_ATIVACOES (req. 4.4 do Projeto A);
+ *   - aperiódica e esporádica: uma por ocorrência da lista_eventos, sem
+ *     limite (req. 3.3.5: "inúmeros eventos");
+ *   - servidor: não termina pela contagem, e sim junto com a simulação
+ *     (ver atualizar_fim); INT_MAX nunca é alcançado. */
 int tcb_total_ativacoes(const TCB *k) {
-    (void)k;
-    return MAX_ATIVACOES;
+    switch (k->tipo) {
+    case TIPO_APERIODICA:
+    case TIPO_ESPORADICA: return k->nocorrencias;
+    case TIPO_SERVIDOR: return INT_MAX;
+    default: return MAX_ATIVACOES;
+    }
 }
 
 /* Instante em que chegou a ativação j, que já precisa ter sido liberada
- * (0 <= j < liberadas). Fica numa função pelo mesmo motivo da anterior: o
- * lugar de onde vem a chegada depende do tipo da tarefa. */
+ * (0 <= j < liberadas). A da aperiódica/esporádica sai da lista de
+ * ocorrências, relativa ao ingresso, e por isso não tem limite de
+ * ativações; a da periódica fica no vetor chegadas (são no máximo
+ * MAX_ATIVACOES). O servidor só guarda o início do período atual. */
 int tcb_chegada(const TCB *k, int j) {
+    if (tcb_eh_atendida(k)) return k->ingresso + k->ocorrencias[j];
+    if (tcb_eh_servidor(k)) return k->chegada_atual;
     return k->chegadas[j];
+}
+
+/* Coluna "ativ." das tabelas: concluídas/total. O servidor não tem
+ * ativações próprias para contar. */
+void tcb_ativacoes_txt(const TCB *k, char *buf, size_t tam) {
+    if (tcb_eh_servidor(k)) snprintf(buf, tam, "-");
+    else snprintf(buf, tam, "%d/%d", k->concluidas, tcb_total_ativacoes(k));
 }
 
 /* Nome de cada tipo de evento, para as listas de eventos do passo a passo. */
@@ -130,17 +177,42 @@ void tcb_iniciar(TCB *k, const TarefaCfg *t) {
     k->eventos_raw = t->eventos;
     k->eventos = (const char *const *)t->lista_ev;
     k->neventos = t->nev;
+    k->tipo = t->tipo;
+    k->servidor = t->servidor;
+    k->ocorrencias = t->ocorr;     /* aponta para a configuração, como `eventos` */
+    k->nocorrencias = t->nocorr;
     k->estado = T_NOVA;            /* ainda não chegou ao sistema             */
     k->proxima_chegada = t->ingresso; /* a 1ª ativação chega no ingresso      */
+    /* ... ou, na aperiódica/esporádica, na 1ª ocorrência da lista */
+    if (tcb_eh_atendida(k) && k->nocorrencias > 0) k->proxima_chegada = t->ingresso + k->ocorrencias[0];
     k->cpu = -1;                   /* -1 = não está em nenhuma CPU            */
+    k->atendendo = -1;             /* servidor sem aperiódica                 */
+    k->atendida_por = -1;          /* aperiódica na fila (quando chegar)      */
     k->termino = -1;               /* -1 = ainda não terminou                 */
 }
 
-/* A simulação acaba quando TODAS as tarefas estão terminadas. */
+/* A simulação acaba quando TODAS as tarefas estão terminadas. Os servidores
+ * não contam: não têm um número de ativações e só existem para executar as
+ * aperiódicas; terminam junto com o resto (atualizar_fim). */
 static bool todas_terminadas(const Estado *e) {
     for (int i = 0; i < e->n; i++)
-        if (e->tarefas[i].estado != T_TERMINADA) return false;
+        if (!tcb_eh_servidor(&e->tarefas[i]) && e->tarefas[i].estado != T_TERMINADA) return false;
     return true;
+}
+
+/* Recalcula e->fim e, se acabou, encerra os servidores no instante atual. */
+static void atualizar_fim(Estado *e) {
+    e->fim = todas_terminadas(e);
+    if (!e->fim) return;
+    for (int i = 0; i < e->n; i++) {
+        TCB *k = &e->tarefas[i];
+        if (!tcb_eh_servidor(k) || k->estado == T_TERMINADA) continue;
+        k->estado = T_TERMINADA;
+        k->motivo = SUSP_NENHUM;
+        k->cpu = -1;
+        k->atendendo = -1;
+        k->termino = e->t;
+    }
 }
 
 /* =========================================================================
@@ -162,7 +234,7 @@ void sim_iniciar(Simulador *s, const Config *cfg, bool historico, uint64_t semen
      * pedir ao menos 1 evita tratar esse caso em todo lugar. */
     e->tarefas = xcalloc((size_t)(cfg->n ? cfg->n : 1), sizeof(TCB));
     for (int i = 0; i < cfg->n; i++) tcb_iniciar(&e->tarefas[i], &cfg->tarefas[i]);
-    e->fim = todas_terminadas(e);
+    atualizar_fim(e);
     s->largura = cfg->n;   /* colunas do rastro do Gantt = número de tarefas */
     hist_gravar(s);        /* o instante 0 também é um snapshot              */
 }
@@ -199,76 +271,179 @@ static void iniciar_ativacao(TCB *k, int agora) {
     k->fila_desde = agora;
 }
 
+/* ------------------------------------------------------------- chegadas */
+
+/* Libera a próxima ativação da tarefa i no instante t (passo 1 do tick). */
+static void liberar_ativacao(Simulador *s, int i, int t) {
+    TCB *k = &s->atual.tarefas[i];
+    if (k->tipo == TIPO_PERIODICA) k->chegadas[k->liberadas] = t;   /* anota a hora da chegada */
+    evento_add(s, t, t, EV_CHEGADA, i, k->liberadas, -1);
+    k->liberadas++;
+    if (tcb_eh_atendida(k)) {
+        /* A próxima vem da lista de ocorrências, relativa ao ingresso. */
+        if (k->liberadas < k->nocorrencias) k->proxima_chegada = k->ingresso + k->ocorrencias[k->liberadas];
+    } else {
+        k->proxima_chegada += k->periodo;
+        /* Se a edição fez a próxima chegada ficar no passado, reancora no
+         * tick atual para não chegar atrasadas. */
+        if (k->proxima_chegada <= t) k->proxima_chegada = t + k->periodo;
+    }
+    /* Se a ativação anterior ainda não terminou, esta fica acumulada e
+     * começa assim que a anterior acabar */
+    if (k->restante == 0) {
+        iniciar_ativacao(k, t);
+        /* Suspensa pelo usuário continua suspensa (a ativação fica
+         * esperando a retomada); a espera pelo período acabou. Uma
+         * aperiódica pronta é uma aperiódica na fila dos servidores. */
+        if (!suspensa_pelo_usuario(k)) {
+            k->estado = T_PRONTA;
+            k->motivo = SUSP_NENHUM;
+        }
+    }
+}
+
+/* Servidor: no ingresso ele passa a existir e a disputar a CPU sempre que
+ * houver aperiódica na fila. O Background Server não tem períodos nem
+ * capacidade: esta é a única chegada dele. */
+static void chegada_servidor(Simulador *s, int i, int t) {
+    TCB *k = &s->atual.tarefas[i];
+    if (k->liberadas > 0 || t < k->proxima_chegada) return;
+    evento_add(s, t, t, EV_CHEGADA, i, k->liberadas, -1);
+    k->liberadas++;
+    k->chegada_atual = t;
+    k->deadline_abs = t + k->prazo;
+    k->fila_desde = t;
+    if (!suspensa_pelo_usuario(k)) {
+        k->estado = T_SUSPENSA;
+        k->motivo = SUSP_SEM_TRABALHO;
+    }
+}
+
+/* ----------------------------------------------------------- servidores */
+
+/* A fila de aperiódicas (req. B 2.2): aperiódicas e esporádicas com uma
+ * ativação pendente que nenhum servidor tirou da fila. A suspensa pelo
+ * usuário fica de fora até ser retomada. */
+static bool na_fila(const TCB *k) {
+    return tcb_eh_atendida(k) && k->restante > 0 && k->atendida_por < 0 &&
+           (k->estado == T_PRONTA || k->estado == T_EXECUTANDO);
+}
+
+static int tamanho_da_fila(const Estado *e) {
+    int n = 0;
+    for (int i = 0; i < e->n; i++)
+        if (na_fila(&e->tarefas[i])) n++;
+    return n;
+}
+
+/* A primeira da fila é a que chegou antes (FIFO). Chegadas no mesmo instante
+ * vão pela ordem do vetor, para o resultado não depender de sorteio. -1 se a
+ * fila está vazia. */
+static int primeira_da_fila(const Estado *e) {
+    int melhor = -1;
+    for (int i = 0; i < e->n; i++) {
+        const TCB *k = &e->tarefas[i];
+        if (na_fila(k) && (melhor < 0 || k->chegada_atual < e->tarefas[melhor].chegada_atual)) melhor = i;
+    }
+    return melhor;
+}
+
+/* Desfaz os vínculos que deixaram de valer: a aperiódica foi suspensa pelo
+ * usuário ou editada, ou o servidor foi suspenso ou encerrado. A aperiódica
+ * volta para a fila. No andamento normal não há nada a desfazer aqui: o
+ * vínculo acaba no passo 4, quando a ativação termina. */
+static void conferir_vinculos(Estado *e) {
+    for (int i = 0; i < e->n; i++) {
+        TCB *k = &e->tarefas[i];
+        if (!tcb_eh_servidor(k) || k->atendendo < 0) continue;
+        TCB *a = &e->tarefas[k->atendendo];
+        bool vale = k->estado != T_TERMINADA && !suspensa_pelo_usuario(k) && a->atendida_por == i &&
+                    a->restante > 0 && (a->estado == T_PRONTA || a->estado == T_EXECUTANDO);
+        if (!vale) {
+            if (a->atendida_por == i) a->atendida_por = -1;
+            k->atendendo = -1;
+        }
+    }
+    for (int i = 0; i < e->n; i++) {
+        TCB *a = &e->tarefas[i];
+        if (a->atendida_por >= 0 && e->tarefas[a->atendida_por].atendendo != i) a->atendida_por = -1;
+    }
+}
+
+/* O servidor disputa a CPU neste tick? Precisa já ter ingressado, não estar
+ * suspenso pelo usuário e ter o que executar: a aperiódica que já é dele ou
+ * alguma na fila, que ele pega se ganhar a CPU. */
+static bool servidor_disputa(const TCB *k, int nfila) {
+    if (k->estado == T_NOVA || k->estado == T_TERMINADA || suspensa_pelo_usuario(k)) return false;
+    return k->atendendo >= 0 || nfila > 0;
+}
+
+/* O Background Server só fica com a CPU que sobraria desligada: perde para
+ * qualquer outra candidata, seja qual for a prioridade dela. Entre as demais
+ * valem a prioridade do algoritmo e a cadeia de desempate de sempre. */
+static bool em_segundo_plano(const TCB *k) {
+    return tcb_eh_servidor(k) && k->servidor == SERV_BS;
+}
+
+static int comparar_candidatas(const TCB *a, const TCB *b) {
+    bool pa = em_segundo_plano(a), pb = em_segundo_plano(b);
+    if (pa != pb) return pa ? 1 : -1;
+    return sched_comparar(a, b);
+}
+
+/* Os servidores escolhidos para uma CPU que ainda não têm aperiódica, do
+ * mais prioritário para o menos (empate fica na ordem do vetor). Devolve
+ * quantos são; os índices vão para `ordem`. */
+static int servidores_sem_aperiodica(const Estado *e, const int *cand, int nc, const bool *escolhido, int *ordem) {
+    int no = 0;
+    for (int j = 0; j < nc; j++) {
+        int i = cand[j];
+        const TCB *k = &e->tarefas[i];
+        if (!escolhido[i] || !tcb_eh_servidor(k) || k->atendendo >= 0) continue;
+        int p = no++;   /* inserção ordenada, estável */
+        while (p > 0 && comparar_candidatas(&e->tarefas[ordem[p - 1]], k) > 0) {
+            ordem[p] = ordem[p - 1];
+            p--;
+        }
+        ordem[p] = i;
+    }
+    return no;
+}
+
 /* ------------------------------------------------------------ escalonar */
 
-/* O ESCALONADOR: decide quem roda em cada CPU neste tick.
+/* Escolhe quem fica com as CPUs entre as candidatas que não estão `fora`.
  *
  * Em cada rodada pegamos o grupo das "melhores" tarefas restantes (as que
  * empatam em prioridade E nos critérios 1-4). Se o grupo cabe nas CPUs
  * livres, todas entram e a ordem entre elas não importa. Se não cabe,
- * sorteamos quais entram (critério 5) e marcamos o evento de sorteio. Assim
+ * sorteamos quais entram (critério 5) e marcamos quem foi sorteado. Assim
  * só há sorteio quando ele realmente decide quem executa.
  *
  * Exemplo com 2 CPUs e candidatas A (prio 5), B (prio 5), C (prio 9):
  *   rodada 1: melhor = A; grupo = {A, B} (empatam); cabe nas 2 CPUs -> entram.
  *   C fica de fora (CPUs acabaram). Não houve sorteio.
  * Com 1 CPU: rodada 1 grupo = {A, B}, mas só 1 CPU livre -> sorteia entre A e B. */
-static bool escalonar(Simulador *s) {
-    Estado *e = &s->atual;
-    const Escalonador *esc = sched_obter(e->alg);
-    int n = e->n, t = e->t;
-
-    /* Vetores de trabalho (liberados no fim da função):
-     *   cand      - índices das tarefas candidatas a executar neste tick
-     *   grupo     - empatadas da rodada atual
-     *   escolhido - quem ganhou uma CPU
-     *   sorteado  - quem ganhou a CPU por sorteio (para marcar no Gantt) */
-    int *cand = xmalloc((size_t)(n ? n : 1) * sizeof(int));
-
-    /* Candidata = está pronta OU já estava executando, e ainda tem trabalho
-     * a fazer (restante > 0). Para cada uma, recalculamos a prioridade com o
-     * algoritmo atual (RM, EDF, plugin ou fórmula). Se o escalonador não
-     * conseguir (ex.: divisão por zero numa fórmula), nada foi decidido ainda:
-     * devolvemos false com o motivo em s->erro, sem inventar uma prioridade. */
-    int nc = 0;
-    for (int i = 0; i < n; i++) {
-        TCB *k = &e->tarefas[i];
-        if ((k->estado == T_PRONTA || k->estado == T_EXECUTANDO) && k->restante > 0) {
-            /* Esgotou o quantum no tick anterior: volta para o fim da fila.
-             * É a mesma condição do evento "fim de quantum" registrado mais
-             * abaixo, mas precisa valer ANTES de calcular as prioridades, para
-             * um escalonador que usa fila_desde (Round Robin) já trocar de
-             * tarefa neste tick, e não um tick depois. RM e EDF não leem o
-             * campo, e o contador quantum_usado continua sendo zerado lá
-             * embaixo, como sempre foi. */
-            if (k->cpu >= 0 && k->quantum_usado >= e->quantum) k->fila_desde = t;
-            if (sched_atualizar(esc, k, t, s->erro, sizeof s->erro)) {
-                free(cand);
-                return false;
-            }
-            cand[nc++] = i;
-        }
-    }
-    int *grupo = xmalloc((size_t)(n ? n : 1) * sizeof(int));
-    bool *escolhido = xcalloc((size_t)(n ? n : 1), sizeof(bool));
-    bool *sorteado = xcalloc((size_t)(n ? n : 1), sizeof(bool));
-
+static void selecionar(Estado *e, const int *cand, int nc, const bool *fora, bool *escolhido, bool *sorteado,
+                       int *grupo) {
     int livres = e->ncpus;     /* CPUs ainda sem tarefa nesta rodada          */
-    int restantes = nc;        /* candidatas ainda sem decisão                */
+    int restantes = 0;         /* candidatas ainda sem decisão                */
+    for (int j = 0; j < nc; j++)
+        if (!fora[cand[j]]) restantes++;
     while (livres > 0 && restantes > 0) {
-        /* melhor entre os não escolhidos: varredura simples; sched_comparar
-         * < 0 significa "a vem antes de b" (prioridade ativa + desempate). */
+        /* melhor entre os não escolhidos: varredura simples; comparar < 0
+         * significa "a vem antes de b" (prioridade ativa + desempate). */
         int melhor = -1;
         for (int j = 0; j < nc; j++) {
-            if (escolhido[cand[j]]) continue;
-            if (melhor < 0 || sched_comparar(&e->tarefas[cand[j]], &e->tarefas[melhor]) < 0)
-                melhor = cand[j];
+            int i = cand[j];
+            if (escolhido[i] || fora[i]) continue;
+            if (melhor < 0 || comparar_candidatas(&e->tarefas[i], &e->tarefas[melhor]) < 0) melhor = i;
         }
         /* grupo = todas as que empatam COM a melhor (comparar == 0). */
         int ng = 0;
         for (int j = 0; j < nc; j++) {
             int i = cand[j];
-            if (!escolhido[i] && sched_comparar(&e->tarefas[i], &e->tarefas[melhor]) == 0)
+            if (!escolhido[i] && !fora[i] && comparar_candidatas(&e->tarefas[i], &e->tarefas[melhor]) == 0)
                 grupo[ng++] = i;
         }
         if (ng <= livres) {
@@ -292,6 +467,105 @@ static bool escalonar(Simulador *s) {
             restantes -= livres;
             livres = 0;
         }
+    }
+}
+
+/* O ESCALONADOR: decide quem roda em cada CPU neste tick.
+ *
+ * Disputam a CPU as periódicas com ativação pendente e os servidores com
+ * trabalho (servidor_disputa). Aperiódicas e esporádicas nunca disputam
+ * (req. B 1.1): ficam na fila, e o servidor que ganha a CPU tira a primeira
+ * da fila e a executa no lugar dele. Para isso não ser só uma promessa, a
+ * seleção é conferida depois: se um servidor escolhido não tem aperiódica
+ * para pegar (outros servidores mais prioritários levaram as da fila), ele
+ * sai da disputa e a seleção é refeita sem ele, para a CPU ir para a
+ * próxima candidata em vez de ficar ocupada à toa. O gerador aleatório volta
+ * ao estado de antes a cada tentativa, então só a seleção final conta. */
+static bool escalonar(Simulador *s) {
+    Estado *e = &s->atual;
+    const Escalonador *esc = sched_obter(e->alg);
+    int n = e->n, t = e->t;
+
+    /* Vetores de trabalho (liberados no fim da função):
+     *   cand      - índices das tarefas candidatas a executar neste tick
+     *   grupo     - empatadas da rodada atual
+     *   escolhido - quem ganhou uma CPU
+     *   sorteado  - quem ganhou a CPU por sorteio (para marcar no Gantt)
+     *   fora      - servidor que saiu da disputa por não ter o que executar */
+    int *cand = xmalloc((size_t)(n ? n : 1) * sizeof(int));
+
+    conferir_vinculos(e);
+    int nfila = tamanho_da_fila(e);
+
+    /* Candidata = periódica pronta OU que já estava executando, e que ainda
+     * tem trabalho a fazer (restante > 0); ou servidor com trabalho. Para
+     * cada uma, recalculamos a prioridade com o algoritmo atual (RM, EDF,
+     * plugin ou fórmula). Se o escalonador não conseguir (ex.: divisão por
+     * zero numa fórmula), nada foi decidido ainda: devolvemos false com o
+     * motivo em s->erro, sem inventar uma prioridade. */
+    int nc = 0;
+    for (int i = 0; i < n; i++) {
+        TCB *k = &e->tarefas[i];
+        if (tcb_eh_atendida(k)) continue;   /* executa por meio de um servidor */
+        if (tcb_eh_servidor(k)) {
+            if (!servidor_disputa(k, nfila)) {
+                /* Sem trabalho: sai da CPU sem que isso seja uma preempção. */
+                if (k->estado != T_NOVA && k->estado != T_TERMINADA && !suspensa_pelo_usuario(k)) {
+                    k->estado = T_SUSPENSA;
+                    k->motivo = SUSP_SEM_TRABALHO;
+                    k->cpu = -1;
+                    k->quantum_usado = 0;
+                }
+                continue;
+            }
+            if (k->estado == T_SUSPENSA) {   /* tinha nada a fazer; agora entra no fim da fila */
+                k->estado = T_PRONTA;
+                k->motivo = SUSP_NENHUM;
+                k->fila_desde = t;
+            }
+        } else if (!((k->estado == T_PRONTA || k->estado == T_EXECUTANDO) && k->restante > 0)) {
+            continue;
+        }
+        /* Esgotou o quantum no tick anterior: volta para o fim da fila.
+         * É a mesma condição do evento "fim de quantum" registrado mais
+         * abaixo, mas precisa valer ANTES de calcular as prioridades, para
+         * um escalonador que usa fila_desde (Round Robin) já trocar de
+         * tarefa neste tick, e não um tick depois. RM e EDF não leem o
+         * campo, e o contador quantum_usado continua sendo zerado lá
+         * embaixo, como sempre foi. */
+        if (k->cpu >= 0 && k->quantum_usado >= e->quantum) k->fila_desde = t;
+        if (sched_atualizar(esc, k, t, s->erro, sizeof s->erro)) {
+            free(cand);
+            return false;
+        }
+        cand[nc++] = i;
+    }
+    int *grupo = xmalloc((size_t)(n ? n : 1) * sizeof(int));
+    bool *escolhido = xcalloc((size_t)(n ? n : 1), sizeof(bool));
+    bool *sorteado = xcalloc((size_t)(n ? n : 1), sizeof(bool));
+    bool *fora = xcalloc((size_t)(n ? n : 1), sizeof(bool));
+    int *ordem = xmalloc((size_t)(n ? n : 1) * sizeof(int));
+
+    /* Seleção, refeita enquanto algum servidor escolhido ficar sem
+     * aperiódica (ver o comentário da função). Termina porque cada volta tira
+     * pelo menos um servidor da disputa. */
+    uint64_t rng_antes = e->rng;
+    for (;;) {
+        e->rng = rng_antes;
+        memset(escolhido, 0, (size_t)(n ? n : 1) * sizeof(bool));
+        memset(sorteado, 0, (size_t)(n ? n : 1) * sizeof(bool));
+        selecionar(e, cand, nc, fora, escolhido, sorteado, grupo);
+        int no = servidores_sem_aperiodica(e, cand, nc, escolhido, ordem);
+        if (no <= nfila) break;
+        for (int r = nfila; r < no; r++) fora[ordem[r]] = true;
+    }
+    /* Cada servidor escolhido sem aperiódica tira a primeira da fila (req.
+     * B 2.2), do mais prioritário para o menos. */
+    int no = servidores_sem_aperiodica(e, cand, nc, escolhido, ordem);
+    for (int r = 0; r < no; r++) {
+        int a = primeira_da_fila(e);
+        e->tarefas[a].atendida_por = ordem[r];
+        e->tarefas[ordem[r]].atendendo = a;
     }
 
     /* Distribuição das CPUs. Quem já estava numa CPU válida fica nela
@@ -326,6 +600,15 @@ static bool escalonar(Simulador *s) {
     for (int j = 0; j < nc; j++) {
         int i = cand[j];
         TCB *k = &e->tarefas[i];
+        if (fora[i]) {
+            /* Servidor sem aperiódica para pegar: sai da disputa sem que
+             * isso seja uma preempção. */
+            k->estado = T_SUSPENSA;
+            k->motivo = SUSP_SEM_TRABALHO;
+            k->cpu = -1;
+            k->quantum_usado = 0;
+            continue;
+        }
         if (escolhido[i]) {
             /* Quantum novo se acabou de ganhar a CPU, ou se esgotou o
              * anterior e o escalonador, reavaliando, manteve a tarefa (ela
@@ -355,10 +638,28 @@ static bool escalonar(Simulador *s) {
             k->estado = T_PRONTA;
         }
     }
+
+    /* As aperiódicas acompanham o servidor: executam na CPU dele quando ele
+     * executa; senão esperam (na fila ou com um servidor sem CPU). */
+    for (int i = 0; i < n; i++) {
+        TCB *a = &e->tarefas[i];
+        if (!tcb_eh_atendida(a) || a->restante == 0 || !(a->estado == T_PRONTA || a->estado == T_EXECUTANDO))
+            continue;
+        const TCB *srv = a->atendida_por >= 0 ? &e->tarefas[a->atendida_por] : NULL;
+        if (srv && srv->estado == T_EXECUTANDO) {
+            a->estado = T_EXECUTANDO;
+            a->cpu = srv->cpu;
+        } else {
+            a->estado = T_PRONTA;
+            a->cpu = -1;
+        }
+    }
     free(cand);
     free(grupo);
     free(escolhido);
     free(sorteado);
+    free(fora);
+    free(ordem);
     free(nova_cpu);
     return true;
 }
@@ -383,29 +684,20 @@ static bool executar_tick(Simulador *s) {
     rastro_garantir_coluna(s, t);
 
     /* 1. Chegadas. Usamos >= (e não ==) para que uma edição de ingresso ou
-     * período que "pule" o instante exato não perca a ativação. */
+     * período que "pule" o instante exato não perca a ativação. A periódica
+     * libera no máximo uma por tick; a aperiódica pode ter duas ocorrências
+     * no mesmo instante, e libera todas as que já venceram. */
     for (int i = 0; i < e->n; i++) {
         TCB *k = &e->tarefas[i];
-        /* Terminadas, ou que já liberaram todas as ativações: nada a fazer. */
-        if (k->estado == T_TERMINADA || k->liberadas >= tcb_total_ativacoes(k)) continue;
-        if (t < k->proxima_chegada) continue;   /* ainda não é a hora */
-        k->chegadas[k->liberadas] = t;          /* anota a hora da chegada */
-        evento_add(s, t, t, EV_CHEGADA, i, k->liberadas, -1);
-        k->liberadas++;
-        k->proxima_chegada += k->periodo;
-        /* Se a edição fez a próxima chegada ficar no passado, reancora no
-         * tick atual para não chegar atrasadas. */
-        if (k->proxima_chegada <= t) k->proxima_chegada = t + k->periodo;
-        /* Se a ativação anterior ainda não terminou, esta fica acumulada e
-         * começa assim que a anterior acabar */
-        if (k->restante == 0) {
-            iniciar_ativacao(k, t);
-            /* Suspensa pelo usuário continua suspensa (a ativação fica
-             * esperando a retomada); a espera pelo período acabou. */
-            if (!suspensa_pelo_usuario(k)) {
-                k->estado = T_PRONTA;
-                k->motivo = SUSP_NENHUM;
-            }
+        if (k->estado == T_TERMINADA) continue;
+        if (tcb_eh_servidor(k)) {
+            chegada_servidor(s, i, t);
+            continue;
+        }
+        /* Já liberou todas as ativações, ou ainda não é a hora: nada a fazer. */
+        while (k->liberadas < tcb_total_ativacoes(k) && t >= k->proxima_chegada) {
+            liberar_ativacao(s, i, t);
+            if (!tcb_eh_atendida(k)) break;
         }
     }
 
@@ -428,7 +720,9 @@ static bool executar_tick(Simulador *s) {
         case T_EXECUTANDO:
             s->cel[base + i] = G_EXEC;
             s->cpu[base + i] = (signed char)k->cpu;
-            k->restante--;          /* consumiu 1 tick de CPU */
+            /* consumiu 1 tick de CPU. O servidor não tem trabalho próprio:
+             * quem consome é a aperiódica dele, que também está executando. */
+            if (!tcb_eh_servidor(k)) k->restante--;
             k->ticks_exec++;
             k->quantum_usado++;
             break;
@@ -453,7 +747,14 @@ static bool executar_tick(Simulador *s) {
      * execução porque só agora sabemos se a tarefa terminou neste tick. */
     for (int i = 0; i < e->n; i++) {
         TCB *k = &e->tarefas[i];
+        if (tcb_eh_servidor(k)) continue;   /* não tem ativação própria nem prazo a conferir */
         if (k->estado == T_EXECUTANDO && k->restante == 0) {
+            /* Uma aperiódica que termina a ativação solta o servidor, que
+             * fica livre para pegar a próxima da fila. */
+            if (k->atendida_por >= 0) {
+                e->tarefas[k->atendida_por].atendendo = -1;
+                k->atendida_por = -1;
+            }
             /* Terminou a ativação. Tempo de resposta = fim - chegada. */
             int resp = t + 1 - k->chegada_atual;
             if (resp > k->resposta_max) k->resposta_max = resp;
@@ -491,6 +792,7 @@ static bool executar_tick(Simulador *s) {
          * instante exato do deadline (req. 2.2), e não só quando a ativação
          * finalmente começa a executar. */
         if (k->estado == T_TERMINADA) continue;
+        if (k->prazo <= 0) continue;   /* aperiódica sem prazo: não há prazo a perder */
         /* Começa na primeira pendente que ainda não foi marcada (as de
          * número menor que perdas_ate já foram; ver sched.h), para não
          * marcar a mesma ativação duas vezes. As chegadas são crescentes e o
@@ -512,7 +814,7 @@ static bool executar_tick(Simulador *s) {
 
     /* 5. O relógio avança e vemos se acabou tudo. */
     e->t++;
-    e->fim = todas_terminadas(e);
+    atualizar_fim(e);
     return true;
 }
 
@@ -557,16 +859,24 @@ int sim_ir_para(Simulador *s, int t) {
 }
 
 /* "Bloqueado" = ainda há tarefas por terminar, mas TODAS estão suspensas
- * pelo usuário: nada vai progredir sozinho. Sem esta checagem o "rodar até o
+ * pelo usuário (ou são aperiódicas e todos os servidores estão suspensos):
+ * nada vai progredir sozinho. Sem esta checagem o "rodar até o
  * fim" ficaria em laço infinito. Tarefas esperando o período não contam,
  * pois voltam sozinhas. */
 bool sim_bloqueado(const Estado *e) {
+    /* Uma aperiódica só progride se existe servidor que possa executá-la. */
+    bool servidor = false;
+    for (int i = 0; i < e->n; i++) {
+        const TCB *k = &e->tarefas[i];
+        if (tcb_eh_servidor(k) && k->estado != T_TERMINADA && !suspensa_pelo_usuario(k)) servidor = true;
+    }
     bool alguma = false;
     for (int i = 0; i < e->n; i++) {
-        EstadoTarefa st = e->tarefas[i].estado;
-        if (st == T_TERMINADA) continue;
-        /* Quem espera o período volta sozinha; só o usuário trava a tarefa. */
-        if (!suspensa_pelo_usuario(&e->tarefas[i])) return false;
+        const TCB *k = &e->tarefas[i];
+        if (k->estado == T_TERMINADA || tcb_eh_servidor(k)) continue;
+        /* Quem espera o período volta sozinha; só o usuário trava a tarefa
+         * (ou, na aperiódica, a falta de servidor). */
+        if (!suspensa_pelo_usuario(k) && (!tcb_eh_atendida(k) || servidor)) return false;
         alguma = true;
     }
     return alguma;
@@ -579,7 +889,8 @@ const char *sim_rodar_ate_fim(Simulador *s) {
     if (s->historico && s->nsnaps > 0) hist_carregar(s, s->nsnaps - 1);
     while (!s->atual.fim) {
         if (sim_bloqueado(&s->atual))
-            return "todas as tarefas restantes estão suspensas; retome alguma para continuar";
+            return "todas as tarefas restantes estão suspensas (ou são aperiódicas e todos os servidores estão "
+                   "suspensos); retome alguma para continuar";
         if (s->atual.t >= LIMITE_TICKS) return "limite de segurança de ticks atingido";
         if (!sim_avancar(s)) return s->erro;   /* o escalonador falhou neste tick */
     }
@@ -597,7 +908,7 @@ void sim_preparar_edicao(Simulador *s) {
 }
 
 void sim_concluir_edicao(Simulador *s) {
-    s->atual.fim = todas_terminadas(&s->atual);
+    atualizar_fim(&s->atual);
     hist_gravar(s);
 }
 
@@ -646,11 +957,29 @@ bool sim_ids_inteiros(const Estado *e) {
     return true;
 }
 
+/* Parcela de uma tarefa na utilização: C/P da periódica. Aperiódicas e
+ * esporádicas não entram (executam dentro dos servidores), nem o Background
+ * Server (só usa CPU que ficaria desligada). -1 = não entra. */
+double utilizacao_parcela(TipoTarefa tipo, TipoServidor servidor, int duracao, int periodo) {
+    (void)servidor;
+    if (tipo == TIPO_PERIODICA && periodo > 0) return (double)duracao / periodo;
+    return -1;
+}
+
 /* Utilização do processador: U = soma de C/P (duração / período). Se U > 1
- * numa CPU só, é impossível cumprir todos os prazos. */
-double sim_utilizacao(const Estado *e) {
+ * numa CPU só, é impossível cumprir todos os prazos. Em `n` (pode ser NULL)
+ * vai quantas tarefas entraram na soma, o n do limite do RM. */
+double sim_utilizacao(const Estado *e, int *n) {
     double u = 0;
-    for (int i = 0; i < e->n; i++) u += (double)e->tarefas[i].duracao / e->tarefas[i].periodo;
+    int cont = 0;
+    for (int i = 0; i < e->n; i++) {
+        const TCB *k = &e->tarefas[i];
+        double p = utilizacao_parcela(k->tipo, k->servidor, k->duracao, k->periodo);
+        if (p < 0) continue;
+        u += p;
+        cont++;
+    }
+    if (n) *n = cont;
     return u;
 }
 
@@ -917,7 +1246,7 @@ void edicao_alternar_suspensao(TCB *k) {
             k->motivo = SUSP_NENHUM;
         } else {
             k->estado = T_SUSPENSA;
-            k->motivo = SUSP_PERIODO;
+            k->motivo = tcb_eh_servidor(k) ? SUSP_SEM_TRABALHO : SUSP_PERIODO;
         }
     } else {
         k->estado = T_SUSPENSA;

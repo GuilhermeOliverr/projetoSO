@@ -1342,8 +1342,16 @@ static int tela_config(Config *cfg) {
         /* tarefas */
         Linhas util = {0};
         double u = 0;
-        for (int i = 0; i < cfg->n; i++) u += (double)cfg->tarefas[i].duracao / cfg->tarefas[i].periodo;
-        linhas_utilizacao(&util, cfg->n, u, cfg->algoritmo);
+        int nu = 0;   /* quantas entram na utilização (o n do limite do RM) */
+        for (int i = 0; i < cfg->n; i++) {
+            const TarefaCfg *tc = &cfg->tarefas[i];
+            double p = utilizacao_parcela(tc->tipo, tc->servidor, tc->duracao, tc->periodo);
+            if (p >= 0) {
+                u += p;
+                nu++;
+            }
+        }
+        linhas_utilizacao(&util, nu, u, cfg->algoritmo);
         int h_util = linhas_visuais(&util, w - 24) * LINHA + 10;
         /* avisos do arquivo (ex.: eventos lidos e guardados), com
          * quebra de linha; até 6 linhas, o resto rola com a roda do mouse */
@@ -1355,7 +1363,7 @@ static int tela_config(Config *cfg) {
         int h_tab = T.h - y - 10 - h_msg - (ALT_BOTAO + 24);
         if (h_tab < 150) h_tab = 150;
         painel(x, y, w, h_tab);
-        snprintf(lin, sizeof lin, "Tarefas (%d periódicas)", cfg->n);
+        snprintf(lin, sizeof lin, "Tarefas (%d)", cfg->n);
         titulo_painel(x, y, lin);
         int wn = largura_botao("+ Nova tarefa");
         botao(x + w - 12 - wn, y + 6, wn, "+ Nova tarefa", C_NOVA, true, B_NORMAL);
@@ -1380,7 +1388,7 @@ static int tela_config(Config *cfg) {
         int cabem = lh / 30;
         if (cabem < 1) cabem = 1;
         area_rolagem(x, ly, w, cabem * 30, &rol, cfg->n - cabem);
-        if (cfg->n == 0) tela_texto(&T, x + 24, ly + 6, "Nenhuma tarefa periódica. Use \"+ Nova tarefa\" ou abra outro arquivo.", C_FRACO);
+        if (cfg->n == 0) tela_texto(&T, x + 24, ly + 6, "Nenhuma tarefa. Use \"+ Nova tarefa\" ou abra outro arquivo.", C_FRACO);
         int we = largura_botao("Editar"), wr = largura_botao("Remover");
         for (int i = rol, j = 0; i < cfg->n && j < cabem; i++, j++) {
             const TarefaCfg *t = &cfg->tarefas[i];
@@ -1437,7 +1445,7 @@ static int tela_config(Config *cfg) {
         case C_PASSO:
         case C_COMPLETA:
             if (cfg->n == 0) {
-                fmsg(msg, sizeof msg, "erro: não há tarefas periódicas para simular; use \"+ Nova tarefa\" ou abra outro arquivo");
+                fmsg(msg, sizeof msg, "erro: não há tarefas para simular; use \"+ Nova tarefa\" ou abra outro arquivo");
                 break;
             }
             return acao == C_PASSO ? 'a' : 'b';
@@ -1473,7 +1481,8 @@ static int tela_config(Config *cfg) {
         case C_NOVA: {
             const char **ids = ids_cfg(cfg);
             TarefaCfg t = {"", config_cor_padrao(cfg->n), PADRAO_INGRESSO,
-                           PADRAO_DURACAO, PADRAO_PERIODO, PADRAO_PERIODO, NULL, 0, NULL, 0};
+                           PADRAO_DURACAO, PADRAO_PERIODO, PADRAO_PERIODO, NULL, 0, NULL, 0,
+                           TIPO_PERIODICA, SERV_BS, NULL, 0};
             id_sugerir(ids, cfg->n, t.id, sizeof t.id);
             char ev_txt[512];
             if (form_tarefa("Nova tarefa", &t, ids, cfg->n, -1, 0, ev_txt, sizeof ev_txt)) {
@@ -1626,14 +1635,14 @@ static void linhas_tarefa(const Sessao *z, int i, Linhas *L) {
             k->ingresso, k->duracao, k->periodo, k->prazo);
     lin_add(L, C_TEXTO, false, "Estado: %s", estado_descricao(k));
     if (k->restante > 0) lin_add(L, C_TEXTO, false, "Prioridade (menor = mais prioritária): nominal %d, ativa %d", k->prio_nominal, k->prio_ativa);
-    lin_add(L, C_TEXTO, false, "Ativações: %d chegaram, %d concluídas (de %d)", k->liberadas, k->concluidas, tcb_total_ativacoes(k));
+    if (!tcb_eh_servidor(k)) lin_add(L, C_TEXTO, false, "Ativações: %d chegaram, %d concluídas (de %d)", k->liberadas, k->concluidas, tcb_total_ativacoes(k));
     if (k->restante > 0) {
         bool perdeu = ativacao_atual_perdeu_prazo(k);
         lin_add(L, perdeu ? C_ERRO : C_TEXTO, perdeu, "Ativação atual: nº %d, chegou em %d, deadline em %d, faltam %d tick(s)%s",
                 k->concluidas + 1, k->chegada_atual, k->deadline_abs, k->restante, perdeu ? " - PRAZO PERDIDO" : "");
         if (k->liberadas - k->concluidas > 1) lin_add(L, C_TEXTO, false, "Ativações acumuladas esperando: %d", k->liberadas - k->concluidas - 1);
     }
-    if (k->liberadas < tcb_total_ativacoes(k) && k->estado != T_TERMINADA) lin_add(L, C_TEXTO, false, "Próxima chegada: instante %d", k->proxima_chegada);
+    if (!tcb_eh_servidor(k) && k->liberadas < tcb_total_ativacoes(k) && k->estado != T_TERMINADA) lin_add(L, C_TEXTO, false, "Próxima chegada: instante %d", k->proxima_chegada);
     if (k->cpu >= 0) lin_add(L, C_TEXTO, false, "CPU no último tick: CPU%d (quantum usado %d/%d)", k->cpu, k->quantum_usado, z->s.atual.quantum);
     else lin_add(L, C_TEXTO, false, "CPU no último tick: nenhuma");
     lin_add(L, C_TEXTO, false, "Executou %d, esperou %d, suspensa %d tick(s); %d preempção(ões), %d sorteio(s), %d prazo(s) perdido(s)",
@@ -1657,7 +1666,9 @@ static void linhas_sistema(const Sessao *z, Linhas *L) {
     lin_add(L, C_TEXTO, true, "Sistema no instante %d: %s", e->t,
             e->fim ? "simulação concluída" : sim_bloqueado(e) ? "bloqueada (todas as restantes suspensas)" : "em andamento");
     lin_add(L, C_TEXTO, false, "Algoritmo %s | quantum %d | %d CPU(s)", esc->nome, e->quantum, e->ncpus);
-    linhas_utilizacao(L, e->n, sim_utilizacao(e), e->alg);
+    int nu;
+    double u = sim_utilizacao(e, &nu);
+    linhas_utilizacao(L, nu, u, e->alg);
     lin_add(L, C_FRACO, true, "  %6s  %-27s %6s %8s %8s %4s %6s", "id", "estado", "ativ.", "restante", "deadline", "CPU", "prazos");
     int *ordem = gantt_ordem(e);
     for (int r = e->n - 1; r >= 0; r--) {
@@ -1668,8 +1679,10 @@ static void linhas_sistema(const Sessao *z, Linhas *L) {
             snprintf(dl, sizeof dl, "%d", k->deadline_abs);
         }
         if (k->cpu >= 0) snprintf(cpu, sizeof cpu, "%d", k->cpu);
-        lin_add(L, k->deadlines_perdidos ? C_ERRO : C_TEXTO, false, "%*s%s  %-27s %3d/%-2d %8s %8s %4s %6d", folga(k->id, 6), "", k->id,
-                estado_descricao(k), k->concluidas, tcb_total_ativacoes(k), rest, dl, cpu, k->deadlines_perdidos);
+        char ativ[32];
+        tcb_ativacoes_txt(k, ativ, sizeof ativ);
+        lin_add(L, k->deadlines_perdidos ? C_ERRO : C_TEXTO, false, "%*s%s  %-27s %6s %8s %8s %4s %6d", folga(k->id, 6), "", k->id,
+                estado_descricao(k), ativ, rest, dl, cpu, k->deadlines_perdidos);
         L->v[L->n - 1].amostra = k->cor;
     }
     free(ordem);
@@ -1688,7 +1701,9 @@ static void linhas_estatisticas(const Simulador *s, Linhas *L) {
         perdidos += k->deadlines_perdidos;
         char term[16] = "-";
         if (k->termino >= 0) snprintf(term, sizeof term, "%d", k->termino);
-        lin_add(L, C_TEXTO, false, "%*s%s %4d/%-2d %7d %7d %7d %8.1f %8d %6d %7d %7s", folga(k->id, 6), "", k->id, k->concluidas, tcb_total_ativacoes(k),
+        char ativ[32];
+        tcb_ativacoes_txt(k, ativ, sizeof ativ);
+        lin_add(L, C_TEXTO, false, "%*s%s %7s %7d %7d %7d %8.1f %8d %6d %7d %7s", folga(k->id, 6), "", k->id, ativ,
                 k->deadlines_perdidos, k->ticks_exec, k->ticks_espera,
                 k->concluidas ? (double)k->resposta_soma / k->concluidas : 0.0, k->resposta_max, k->preempcoes,
                 k->sorteios, term);
@@ -1798,7 +1813,9 @@ static void editar_na_simulacao(Sessao *z, int i) {
     else snprintf(c[E_RESTANTE].valor, sizeof c[0].valor, "-");
 
     Linhas intro = {0};
-    lin_add(&intro, C_TEXTO, false, "Estado: %s | ativações %d/%d", estado_descricao(k), k->concluidas, tcb_total_ativacoes(k));
+    char ativ[32];
+    tcb_ativacoes_txt(k, ativ, sizeof ativ);
+    lin_add(&intro, C_TEXTO, false, "Estado: %s | ativações %s", estado_descricao(k), ativ);
     lin_add(&intro, C_FRACO, false, "A mudança vale a partir do instante %d. A duração nova vale a partir da próxima", t);
     lin_add(&intro, C_FRACO, false, "ativação (\"ticks restantes\" muda a atual).");
     if (terminou) lin_add(&intro, C_AVISO, false, "A tarefa já terminou as %d ativações: só a cor pode mudar.", tcb_total_ativacoes(k));
@@ -1937,7 +1954,7 @@ static bool acao_simulacao(Sessao *z, int a) {
         const char **ids = xmalloc((size_t)(e->n + 1) * sizeof *ids);
         for (int i = 0; i < e->n; i++) ids[i] = e->tarefas[i].id;
         TarefaCfg t = {"", config_cor_padrao(e->n), e->t, PADRAO_DURACAO, PADRAO_PERIODO,
-                       PADRAO_PERIODO, NULL, 0, NULL, 0};
+                       PADRAO_PERIODO, NULL, 0, NULL, 0, TIPO_PERIODICA, SERV_BS, NULL, 0};
         id_sugerir(ids, e->n, t.id, sizeof t.id);
         char ev[512];
         bool ok = form_tarefa("Nova tarefa durante a simulação", &t, ids, e->n, -1, e->t, ev, sizeof ev);
