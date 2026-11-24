@@ -17,6 +17,38 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Usada pelos três desenhos. Uma aperiódica executa na CPU do servidor que
+ * a atende, então as duas registram a mesma CPU no rastro: a CPU é do
+ * servidor, que é quem a disputou, e a aperiódica vai à parte, para o
+ * rótulo "PS1:A1" (req. B 4). */
+int gantt_quem_na_cpu(const Simulador *s, int tick, int cpu, int *atendida) {
+    int quem = -1, aper = -1;
+    for (int i = 0; i < s->atual.n; i++) {
+        if (sim_cpu_celula(s, tick, i) != cpu) continue;
+        if (tcb_eh_atendida(&s->atual.tarefas[i])) aper = i;
+        else if (quem < 0) quem = i;
+    }
+    if (quem < 0) {   /* não acontece: a aperiódica só executa junto do servidor */
+        quem = aper;
+        aper = -1;
+    }
+    if (atendida) *atendida = aper;
+    return quem;
+}
+
+/* Rótulo de um trecho da linha da CPU: o id de quem a ocupou e, se era um
+ * servidor executando uma aperiódica, ":" e o id dela ("PS1:A1"). */
+static void rotulo_trecho(const Estado *e, int quem, int aper, bool todos_inteiros, char *buf, size_t tam) {
+    char a[ID_MAX + 8], b[ID_MAX + 8];
+    id_rotulo(e->tarefas[quem].id, todos_inteiros, a, sizeof a);
+    if (aper < 0) {
+        snprintf(buf, tam, "%s", a);
+        return;
+    }
+    id_rotulo(e->tarefas[aper].id, todos_inteiros, b, sizeof b);
+    snprintf(buf, tam, "%s:%s", a, b);
+}
+
 /* ===========================================================================
  * Seção gantt_svg.c (originalmente src/gantt/gantt_svg.c)
  * =========================================================================== */
@@ -131,6 +163,37 @@ static void sorteio(FILE *f, double x, double y) {
             "<text class=\"sorteio-t\" x=\"%.1f\" y=\"%.1f\">?</text>\n", x, y, x, y + 3.5);
 }
 
+/* Marcadores do Projeto B: recusa no teste de admissão (círculo vermelho
+ * cortado, como uma placa de "proibido"), recarga do Sporadic Server
+ * (círculo verde com +) e capacidade descartada pelo Polling Server
+ * (círculo laranja com -). */
+static void recusa(FILE *f, double x, double y) {
+    fprintf(f, "<circle class=\"recusa\" cx=\"%.1f\" cy=\"%.1f\" r=\"6\"/>"
+            "<path class=\"recusa\" d=\"M%.1f %.1f L%.1f %.1f\"/>\n", x, y, x - 4.2, y - 4.2, x + 4.2, y + 4.2);
+}
+
+static void recarga(FILE *f, double x, double y) {
+    fprintf(f, "<circle class=\"recarga\" cx=\"%.1f\" cy=\"%.1f\" r=\"6\"/>"
+            "<path class=\"sinal\" d=\"M%.1f %.1f H%.1f M%.1f %.1f V%.1f\"/>\n", x, y, x - 3.5, y, x + 3.5, x, y - 3.5, y + 3.5);
+}
+
+static void descarte(FILE *f, double x, double y) {
+    fprintf(f, "<circle class=\"descarte\" cx=\"%.1f\" cy=\"%.1f\" r=\"6\"/>"
+            "<path class=\"sinal\" d=\"M%.1f %.1f H%.1f\"/>\n", x, y, x - 3.5, y, x + 3.5);
+}
+
+/* Retângulo de quem está executando: sólido na periódica; listrado e com
+ * borda grossa no servidor; com borda tracejada grossa na aperiódica
+ * (req. B 4). */
+static void ret_exec(FILE *f, const TCB *k, int x, int y, int w, int h) {
+    const char *classe = tcb_eh_servidor(k) ? "exec serv" : tcb_eh_atendida(k) ? "exec aper" : "exec";
+    fprintf(f, "<rect class=\"%s\" x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" fill=\"#%06X\"/>\n",
+            classe, x, y, w, h, k->cor);
+    if (tcb_eh_servidor(k))
+        fprintf(f, "<rect x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" fill=\"url(#listras)\"/>\n",
+                x + 1, y + 1, w > 2 ? w - 2 : w, h - 2);
+}
+
 /* Gera o arquivo SVG da simulação INTEIRA (T = número de ticks simulados).
  * Devolve false e escreve o motivo em `erro` se não conseguir gravar. */
 bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char *erro, int tam_erro) {
@@ -157,7 +220,7 @@ bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char
     int y_leg = y_cpus + ncpu * ALT_CPU + 28;
     int larg = margem + T * cw + 40;
     if (larg < 980) larg = 980;
-    int alt = y_leg + 80;
+    int alt = y_leg + 106;
 
     fprintf(f, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
                "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" height=\"%d\" "
@@ -171,6 +234,10 @@ bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char
           "<pattern id=\"deslig\" width=\"6\" height=\"6\" patternUnits=\"userSpaceOnUse\" "
           "patternTransform=\"rotate(45)\"><rect width=\"6\" height=\"6\" fill=\"#eee\"/>"
           "<line x1=\"0\" y1=\"0\" x2=\"0\" y2=\"6\" stroke=\"#aaa\" stroke-width=\"2\"/></pattern>\n"
+          /* servidor executando: listras claras por cima da cor (req. B 4) */
+          "<pattern id=\"listras\" width=\"7\" height=\"7\" patternUnits=\"userSpaceOnUse\" "
+          "patternTransform=\"rotate(45)\"><line x1=\"0\" y1=\"0\" x2=\"0\" y2=\"7\" stroke=\"#fff\" "
+          "stroke-opacity=\"0.55\" stroke-width=\"2.5\"/></pattern>\n"
           "</defs>\n<style>\n"
           ".titulo{font-size:17px;font-weight:bold}.sub{font-size:12px;fill:#444}\n"
           ".rot{font-size:13px;font-weight:bold;text-anchor:end}\n"
@@ -178,6 +245,9 @@ bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char
           ".num{font-size:10px;text-anchor:middle;fill:#333}\n"
           ".base{stroke:#bbb;stroke-width:1}\n"
           ".exec{stroke:#222;stroke-width:0.6}.cpu-t{font-size:10px;text-anchor:middle}\n"
+          ".serv{stroke:#000;stroke-width:2.2}.aper{stroke:#000;stroke-width:2.2;stroke-dasharray:5 3}\n"
+          ".recusa{fill:#fff;stroke:#C00000;stroke-width:1.8}.recarga{fill:#2E9E44}.descarte{fill:#E67E22}\n"
+          ".sinal{stroke:#fff;stroke-width:1.8}\n"
           ".pronta{fill:none;stroke:#888;stroke-width:1;stroke-dasharray:3 2}\n"
           ".susp{fill:url(#susp);stroke:#000;stroke-width:0.8}\n"
           ".deslig{fill:url(#deslig);stroke:#999;stroke-width:0.5}\n"
@@ -199,7 +269,7 @@ bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char
     fputs("</text>\n", f);
     fprintf(f, "<text class=\"sub\" x=\"16\" y=\"46\">Algoritmo %s · %d CPU(s) · quantum %d · "
                "U = %.3f · %d tick(s) simulados · prazos perdidos: %d%s</text>\n",
-            esc_alg ? esc_alg->nome : "?", e->ncpus, e->quantum, sim_utilizacao(e), T, perdidos,
+            esc_alg ? esc_alg->nome : "?", e->ncpus, e->quantum, sim_utilizacao(e, NULL), T, perdidos,
             e->fim ? "" : " · (simulação incompleta)");
 
     /* grade vertical e eixo. `passo` = de quantos em quantos ticks vai um
@@ -251,8 +321,7 @@ bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char
             while (t2 < T && sim_celula(s, t2, i) == c && sim_cpu_celula(s, t2, i) == cpu) t2++;
             int x = margem + t * cw, w = (t2 - t) * cw;
             if (c == G_EXEC) {
-                fprintf(f, "<rect class=\"exec\" x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" fill=\"#%06X\"/>\n",
-                        x, yb, w, ALT_BARRA, k->cor);
+                ret_exec(f, k, x, yb, w, ALT_BARRA);
                 if (w >= 10) {
                     fprintf(f, "<text class=\"cpu-t\" x=\"%.1f\" y=\"%d\" fill=\"#%06X\">%s%d</text>\n",
                             x + w / 2.0, yb + 13, cor_contraste(k->cor), w >= 40 ? "CPU" : "", cpu);
@@ -280,6 +349,9 @@ bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char
         case EV_TERMINO: quadrado(f, x + 6, yb); break;
         case EV_PRAZO_PERDIDO: xis(f, x, yb + ALT_BARRA / 2.0); break;
         case EV_SORTEIO: sorteio(f, x + 6, yb - 8); break;
+        case EV_RECUSA: recusa(f, x + 7, yb + ALT_BARRA / 2.0); break;
+        case EV_RECARGA: recarga(f, x + 7, yb - 7); break;
+        case EV_DESCARTE: descarte(f, x + 7, yb - 7); break;
         default: break;
         }
     }
@@ -290,20 +362,17 @@ bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char
      * t (-1 = ninguém), achado procurando qual tarefa registrou aquela CPU. */
     fprintf(f, "<text class=\"rot\" x=\"%d\" y=\"%d\" style=\"text-anchor:start\">Processadores</text>\n",
             16, y_cpus - 10);
+    char rot_cpu[2 * ID_MAX + 20];
     for (int c = 0; c < ncpu; c++) {
         int y = y_cpus + c * ALT_CPU;
         fprintf(f, "<text class=\"rot\" x=\"%d\" y=\"%d\">CPU%d</text>\n", margem - 10, y + 14, c);
         for (int t = 0; t < T;) {
-            int quem = -1;
-            for (int i = 0; i < n; i++)
-                if (sim_cpu_celula(s, t, i) == c) { quem = i; break; }
+            int aper, quem = gantt_quem_na_cpu(s, t, c, &aper);
             bool existe = c < s->ncpus_col[t];
             int t2 = t + 1;
             while (t2 < T && (c < s->ncpus_col[t2]) == existe) {
-                int q2 = -1;
-                for (int i = 0; i < n; i++)
-                    if (sim_cpu_celula(s, t2, i) == c) { q2 = i; break; }
-                if (q2 != quem) break;
+                int a2, q2 = gantt_quem_na_cpu(s, t2, c, &a2);
+                if (q2 != quem || a2 != aper) break;
                 t2++;
             }
             int x = margem + t * cw, w = (t2 - t) * cw;
@@ -314,15 +383,16 @@ bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char
                         x, y, w, ALT_CPU - 8);
             } else {
                 const TCB *k = &e->tarefas[quem];
-                fprintf(f, "<rect class=\"exec\" x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" fill=\"#%06X\"/>\n",
-                        x, y, w, ALT_CPU - 8, k->cor);
+                ret_exec(f, k, x, y, w, ALT_CPU - 8);
                 /* só escreve o rótulo se couber (~7 px por caractere,
-                 * contando caracteres e não bytes) */
-                id_rotulo(k->id, todos_inteiros, rot, sizeof rot);
-                if (w >= utf8_colunas(rot) * 7) {
+                 * contando caracteres e não bytes); "PS1:A1" se o
+                 * servidor executava uma aperiódica */
+                rotulo_trecho(e, quem, aper, todos_inteiros, rot_cpu, sizeof rot_cpu);
+                if (w < utf8_colunas(rot_cpu) * 7) id_rotulo(k->id, todos_inteiros, rot_cpu, sizeof rot_cpu);
+                if (w >= utf8_colunas(rot_cpu) * 7) {
                     fprintf(f, "<text class=\"cpu-t\" x=\"%.1f\" y=\"%d\" fill=\"#%06X\">",
                             x + w / 2.0, y + 13, cor_contraste(k->cor));
-                    esc(f, rot);
+                    esc(f, rot_cpu);
                     fputs("</text>\n", f);
                 }
             }
@@ -363,6 +433,24 @@ bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char
     lx += 130;
     sorteio(f, lx + 6, ly - 5);
     fprintf(f, "<text class=\"leg\" x=\"%d\" y=\"%d\">sorteio (desempate)</text>\n", lx + 16, ly);
+    /* Projeto B (req. B 4) */
+    lx = 16;
+    ly += 26;
+    const TCB serv = {.tipo = TIPO_SERVIDOR, .cor = 0x95A5A6}, aper = {.tipo = TIPO_APERIODICA, .cor = 0xF39C12};
+    ret_exec(f, &serv, lx, ly - 11, 28, 14);
+    fprintf(f, "<text class=\"leg\" x=\"%d\" y=\"%d\">servidor executando</text>\n", lx + 34, ly);
+    lx += 175;
+    ret_exec(f, &aper, lx, ly - 11, 28, 14);
+    fprintf(f, "<text class=\"leg\" x=\"%d\" y=\"%d\">aperiódica/esporádica executando</text>\n", lx + 34, ly);
+    lx += 255;
+    recusa(f, lx + 6, ly - 5);
+    fprintf(f, "<text class=\"leg\" x=\"%d\" y=\"%d\">recusada (admissão)</text>\n", lx + 16, ly);
+    lx += 150;
+    recarga(f, lx + 6, ly - 5);
+    fprintf(f, "<text class=\"leg\" x=\"%d\" y=\"%d\">recarga (SS)</text>\n", lx + 16, ly);
+    lx += 105;
+    descarte(f, lx + 6, ly - 5);
+    fprintf(f, "<text class=\"leg\" x=\"%d\" y=\"%d\">capacidade descartada (PS)</text>\n", lx + 16, ly);
 
     fputs("</svg>\n", f);
     free(ordem);
@@ -401,7 +489,12 @@ bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char
  *   marcador:  ↓ chegada  ↑ fim de ativação  ↕ os dois no mesmo instante
  *              (todos na coluna do instante exato: a coluna t começa em t)
  *              ■ término (10ª ativação)  ✗ perda de prazo
- *   CPUs:      cor e id da tarefa que ocupou a CPU; · CPU desligada
+ *              ⊘ recusada no teste de admissão  ⊕ recarga (SS)
+ *              ⊖ capacidade descartada (PS)
+ *   Projeto B: /        servidor executando (listras, como no SVG)
+ *              dígito sublinhado: aperiódica executando
+ *   CPUs:      cor e id da tarefa que ocupou a CPU ("PS1:A1" = o servidor
+ *              e a aperiódica que ele executava); · CPU desligada
  *
  * De onde vêm os dados: o simulador (sim.c) já guardou, para cada tick e
  * cada tarefa, o que aconteceu (s->cel) e em qual CPU (s->cpu), além da
@@ -415,6 +508,8 @@ bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char
 #define COR_DESLIGADA  0x606060
 #define COR_PRAZO      0xFF4040
 #define COR_EIXO       0x909090
+#define COR_RECARGA    0x2E9E44
+#define COR_DESCARTE   0xE67E22
 
 /* Transforma a lista de eventos numa "máscara" por célula: para cada
  * (instante, tarefa) um número onde cada BIT diz que um tipo de evento
@@ -440,6 +535,9 @@ void gantt_mascaras(const Simulador *s, int ini, int fim, unsigned char *mask) {
         case EV_TERMINO: *m |= M_TERMINO; break;
         case EV_PRAZO_PERDIDO: *m |= M_PRAZO; break;
         case EV_SORTEIO: *m |= M_SORTEIO; break;
+        case EV_RECUSA: *m |= M_RECUSA; break;
+        case EV_RECARGA: *m |= M_RECARGA; break;
+        case EV_DESCARTE: *m |= M_DESCARTE; break;
         default: break;   /* preempção e fim de quantum não têm marcador */
         }
     }
@@ -509,17 +607,18 @@ static void rotulo_alinhado(const char *rot, int largura) {
 
 /* Quem estava em cada CPU em cada tick: ocup[(t-ini)*MAX_CPUS + c].
  * O rastro guarda "qual CPU usou a tarefa i"; para desenhar as linhas das
- * CPUs precisamos do inverso, "qual tarefa usou a CPU c". Aqui invertemos.
- * -1 = nenhuma (CPU desligada naquele tick). */
-static int *ocupacao(const Simulador *s, int ini, int fim) {
+ * CPUs precisamos do inverso, "qual tarefa usou a CPU c". Aqui invertemos
+ * (gantt_quem_na_cpu). -1 = nenhuma (CPU desligada naquele tick). Em
+ * `*aper` vai, no mesmo formato, a aperiódica que o servidor executava. */
+static int *ocupacao(const Simulador *s, int ini, int fim, int **aper) {
     int *oc = xmalloc((size_t)(fim - ini) * MAX_CPUS * sizeof(int));
+    int *oa = xmalloc((size_t)(fim - ini) * MAX_CPUS * sizeof(int));
     for (int t = ini; t < fim; t++) {
-        for (int c = 0; c < MAX_CPUS; c++) oc[(t - ini) * MAX_CPUS + c] = -1;
-        for (int i = 0; i < s->atual.n; i++) {
-            int c = sim_cpu_celula(s, t, i);
-            if (c >= 0 && c < MAX_CPUS) oc[(t - ini) * MAX_CPUS + c] = i;
-        }
+        for (int c = 0; c < MAX_CPUS; c++) oc[(t - ini) * MAX_CPUS + c] = oa[(t - ini) * MAX_CPUS + c] = -1;
+        for (int c = 0; c < s->ncpus_col[t] && c < MAX_CPUS; c++)
+            oc[(t - ini) * MAX_CPUS + c] = gantt_quem_na_cpu(s, t, c, &oa[(t - ini) * MAX_CPUS + c]);
     }
+    *aper = oa;
     return oc;
 }
 
@@ -652,8 +751,8 @@ void gantt_tui(const Simulador *s, int ini, int fim) {
         const TCB *k = &e->tarefas[i];
 
         /* linha de marcadores: um símbolo por coluna. A ordem do if/else
-         * dá a prioridade visual: perda de prazo > término > chegada+fim
-         * > fim > chegada. */
+         * dá a prioridade visual: perda de prazo > recusa > término >
+         * chegada+fim > fim > chegada > recarga > descarte. */
         printf("%*s ", lbl, "");
         for (int t = ini; t < fim_m; t++) {
             unsigned m = mask[(size_t)(t - ini) * n + i];
@@ -661,6 +760,11 @@ void gantt_tui(const Simulador *s, int ini, int fim) {
                 term_fg(COR_PRAZO);
                 term_negrito();
                 fputs("✗", stdout);
+                term_reset();
+            } else if (m & M_RECUSA) {
+                term_fg(COR_PRAZO);
+                term_negrito();
+                fputs("⊘", stdout);
                 term_reset();
             } else if (m & M_TERMINO) {
                 fputs("■", stdout);
@@ -670,6 +774,14 @@ void gantt_tui(const Simulador *s, int ini, int fim) {
                 fputs("↑", stdout);
             } else if (m & M_CHEGADA) {
                 fputs("↓", stdout);
+            } else if (m & M_RECARGA) {
+                term_fg(COR_RECARGA);
+                fputs("⊕", stdout);
+                term_reset();
+            } else if (m & M_DESCARTE) {
+                term_fg(COR_DESCARTE);
+                fputs("⊖", stdout);
+                term_reset();
             } else {
                 putchar(' ');
             }
@@ -691,10 +803,14 @@ void gantt_tui(const Simulador *s, int ini, int fim) {
             switch (sim_celula(s, t, i)) {
             case G_EXEC:
                 /* fundo = cor da tarefa; texto = número da CPU (ou '?' se
-                 * a tarefa foi escolhida por sorteio neste tick). */
+                 * a tarefa foi escolhida por sorteio neste tick). O
+                 * servidor aparece listrado ('/'), e a aperiódica com o
+                 * número sublinhado (req. B 4); a CPU do servidor está na
+                 * linha da CPU, logo abaixo. */
                 term_bg(k->cor);
                 term_fg(cor_contraste(k->cor));
-                putchar((m & M_SORTEIO) ? '?' : digito_cpu(sim_cpu_celula(s, t, i)));
+                if (tcb_eh_atendida(k)) term_sublinhado();
+                putchar((m & M_SORTEIO) ? '?' : tcb_eh_servidor(k) ? '/' : digito_cpu(sim_cpu_celula(s, t, i)));
                 term_reset();
                 break;
             case G_PRONTA:
@@ -722,7 +838,7 @@ void gantt_tui(const Simulador *s, int ini, int fim) {
     int ncpu_max = e->ncpus;
     for (int t = ini; t < fim; t++)
         if (s->ncpus_col[t] > ncpu_max) ncpu_max = s->ncpus_col[t];
-    int *oc = ocupacao(s, ini, fim);
+    int *oa, *oc = ocupacao(s, ini, fim, &oa);
     const char **curto = xmalloc((size_t)(n ? n : 1) * sizeof *curto);
     const char **marca = xmalloc((size_t)(n ? n : 1) * sizeof *marca);
     rotulos_cpu(e, todos_inteiros, curto, marca);
@@ -750,27 +866,37 @@ void gantt_tui(const Simulador *s, int ini, int fim) {
                 t++;
                 continue;
             }
-            /* trecho contínuo da mesma tarefa: escreve o id dentro dele (cru,
-             * sem o "T" dos rótulos; os de texto sem o prefixo comum) */
+            /* trecho contínuo da mesma tarefa (e, no servidor, da mesma
+             * aperiódica): escreve o id dentro dele (cru, sem o "T" dos
+             * rótulos; os de texto sem o prefixo comum). Servidor com
+             * aperiódica: "PS1:A1"; se não couber, só o id da aperiódica. */
+            int a = oa[(t - ini) * MAX_CPUS + c];
             int t2 = t;
-            while (t2 < fim && oc[(t2 - ini) * MAX_CPUS + c] == i) t2++;
-            const char *id = curto[i];
+            while (t2 < fim && oc[(t2 - ini) * MAX_CPUS + c] == i && oa[(t2 - ini) * MAX_CPUS + c] == a) t2++;
+            char par[2 * ID_MAX + 4];
+            snprintf(par, sizeof par, "%s:%s", curto[i], a >= 0 ? curto[a] : "");
+            const char *id = a >= 0 ? par : curto[i];
             int l = utf8_colunas(id);
+            if (a >= 0 && l > t2 - t) {
+                id = curto[a];
+                l = utf8_colunas(id);
+            }
             term_bg(e->tarefas[i].cor);
             term_fg(cor_contraste(e->tarefas[i].cor));
             /* Se o id (sem o prefixo comum) não cabe no trecho, mostra só o
              * caractere que diferencia a tarefa (ver rotulos_cpu). Cada
              * coluna recebe um caractere inteiro (todos os bytes dele), para
-             * não cortar um caractere UTF-8 ao meio. */
+             * não cortar um caractere UTF-8 ao meio. O resto do trecho do
+             * servidor fica listrado, como a barra dele. */
             bool cabe = l <= t2 - t;
-            if (!cabe) id = marca[i];
+            if (!cabe) id = marca[a >= 0 ? a : i];
             for (int x = 0; x < t2 - t; x++) {
                 if (*id && (x == 0 || (cabe && x < l))) {
                     const char *ini_c = id;
                     utf8_proximo(&id);
                     fwrite(ini_c, 1, (size_t)(id - ini_c), stdout);
                 } else {
-                    putchar(' ');
+                    putchar(tcb_eh_servidor(&e->tarefas[i]) ? '/' : ' ');
                 }
             }
             term_reset();
@@ -781,6 +907,7 @@ void gantt_tui(const Simulador *s, int ini, int fim) {
     free(curto);
     free(marca);
     free(oc);
+    free(oa);
     free(mask);
     free(ordem);
 
@@ -797,7 +924,17 @@ void gantt_tui(const Simulador *s, int ini, int fim) {
     term_fg(COR_DESLIGADA); fputs("·", stdout); term_reset();
     printf(" CPU desligada\n         ↓ chegada  ↑ fim de ativação  ↕ chegada+fim  ■ término  ");
     term_fg(COR_PRAZO); fputs("✗", stdout); term_reset();
-    printf(" perda de prazo\n");
+    printf(" perda de prazo\n         ");
+    term_bg(0x95A5A6); term_fg(0x000000); fputs("/", stdout); term_reset();
+    printf(" servidor executando  ");
+    term_bg(0xF39C12); term_fg(0x000000); term_sublinhado(); fputs("0", stdout); term_reset();
+    printf(" aperiódica executando (sublinhado)  ");
+    term_fg(COR_PRAZO); fputs("⊘", stdout); term_reset();
+    printf(" recusada  ");
+    term_fg(COR_RECARGA); fputs("⊕", stdout); term_reset();
+    printf(" recarga (SS)  ");
+    term_fg(COR_DESCARTE); fputs("⊖", stdout); term_reset();
+    printf(" capacidade descartada (PS)\n");
 }
 
 /* Gantt de toda a simulação: quebra em "faixas" da largura do terminal
@@ -831,16 +968,17 @@ void gantt_texto(const Simulador *s) {
     int ncpu_max = e->ncpus;
     for (int t = 0; t < s->ncols; t++)
         if (s->ncpus_col[t] > ncpu_max) ncpu_max = s->ncpus_col[t];
-    int *oc = ocupacao(s, 0, s->ncols);
+    int *oa, *oc = ocupacao(s, 0, s->ncols, &oa);
+    char par[2 * ID_MAX + 20];
     for (int c = 0; c < ncpu_max; c++) {
         printf("  CPU%d:", c);
         for (int t = 0; t < s->ncols;) {
-            int i = oc[t * MAX_CPUS + c];
+            int i = oc[t * MAX_CPUS + c], a = oa[t * MAX_CPUS + c];
             int t2 = t;
-            while (t2 < s->ncols && oc[t2 * MAX_CPUS + c] == i) t2++;
+            while (t2 < s->ncols && oc[t2 * MAX_CPUS + c] == i && oa[t2 * MAX_CPUS + c] == a) t2++;
             if (i >= 0) {
-                id_rotulo(e->tarefas[i].id, todos_inteiros, rot, sizeof rot);
-                printf(" [%d,%d)%s", t, t2, rot);
+                rotulo_trecho(e, i, a, todos_inteiros, par, sizeof par);   /* "PS1:A1" = servidor executando A1 */
+                printf(" [%d,%d)%s", t, t2, par);
             } else {
                 printf(" [%d,%d)desligada", t, t2);
             }
@@ -849,6 +987,7 @@ void gantt_texto(const Simulador *s) {
         putchar('\n');
     }
     free(oc);
+    free(oa);
     printf("Eventos:\n");
     for (int i = 0; i < s->nev; i++) {
         const Evento *v = &s->ev[i];
@@ -873,7 +1012,11 @@ void gantt_texto(const Simulador *s) {
  *   preto pontilhado = suspensa    seta para baixo = chegada
  *   triângulo para cima = fim de ativação    quadrado = término
  *   X vermelho = perda de prazo    círculo roxo "?" = sorteio
- *   linhas "CPUn": quem ocupou cada CPU; listrado = CPU desligada
+ *   listras + borda grossa = servidor executando
+ *   borda tracejada grossa = aperiódica executando
+ *   círculo cortado = recusada    círculo com + / - = recarga / descarte
+ *   linhas "CPUn": quem ocupou cada CPU ("PS1:A1" = o servidor e a
+ *   aperiódica que ele executava); listrado cinza = CPU desligada
  *
  * Como os outros desenhos, só LÊ o rastro da simulação (s->cel, s->cpu,
  * s->ev); não calcula nada.
@@ -893,6 +1036,9 @@ void gantt_texto(const Simulador *s) {
 #define C_AGORA    0x2563EB
 #define C_PRAZO    0xE00000
 #define C_SORTEIO  0x7B2CBF
+#define C_RECUSA   0xC00000
+#define C_RECARGA  0x2E9E44
+#define C_DESCARTE 0xE67E22
 
 static int largura_rotulos(const Estado *e) {
     int w = texto_largura("CPU00") + 16;
@@ -931,6 +1077,32 @@ static void sorteio_gfx(Tela *t, int x, int y) {
     tela_circulo(t, x, y, 7, 0xFFFFFF);
     tela_circulo(t, x, y, 6, C_SORTEIO);
     tela_texto(t, x - 3, y - 8, "?", 0xFFFFFF);
+}
+
+/* Marcadores do Projeto B (os mesmos desenhos do SVG). */
+static void recusa_gfx(Tela *t, int x, int y) {
+    tela_circulo(t, x, y, 7, C_RECUSA);
+    tela_circulo(t, x, y, 5, 0xFFFFFF);
+    tela_linha(t, x - 4, y - 4, x + 4, y + 4, 2, C_RECUSA);
+}
+
+static void sinal_gfx(Tela *t, int x, int y, uint32_t cor, bool mais) {
+    tela_circulo(t, x, y, 7, 0xFFFFFF);
+    tela_circulo(t, x, y, 6, cor);
+    tela_linha(t, x - 3, y, x + 3, y, 2, 0xFFFFFF);
+    if (mais) tela_linha(t, x, y - 3, x, y + 3, 2, 0xFFFFFF);
+}
+
+/* Retângulo de quem executa: sólido na periódica, listrado no servidor,
+ * borda tracejada grossa na aperiódica (req. B 4). */
+static void ret_exec_gfx(Tela *t, const TCB *k, int x, int y, int w, int h) {
+    if (tcb_eh_servidor(k)) {
+        tela_listrado(t, x, y, w, h, k->cor);
+        return;
+    }
+    tela_ret(t, x, y, w, h, k->cor);
+    if (tcb_eh_atendida(k)) tela_tracejado_grosso(t, x, y, w, h, 0x000000);
+    else tela_moldura(t, x, y, w, h, 0x222222);
 }
 
 /* Texto centralizado num trecho, só se couber. */
@@ -1017,8 +1189,7 @@ void gantt_gfx(Tela *t, const Simulador *s, VistaGantt *v) {
             while (c2 < t_fim && sim_celula(s, c2, i) == g && sim_cpu_celula(s, c2, i) == cpu) c2++;
             int x = x0 + (c - v->t_ini) * v->cw, w = (c2 - c) * v->cw;
             if (g == G_EXEC) {
-                tela_ret(t, x, yb, w, ALT_BARRA, k->cor);
-                tela_moldura(t, x, yb, w, ALT_BARRA, 0x222222);
+                ret_exec_gfx(t, k, x, yb, w, ALT_BARRA);
                 char rot[16];
                 snprintf(rot, sizeof rot, "CPU%d", cpu);
                 if (texto_largura(rot) + 2 > w) snprintf(rot, sizeof rot, "%d", cpu);
@@ -1047,6 +1218,9 @@ void gantt_gfx(Tela *t, const Simulador *s, VistaGantt *v) {
         case EV_TERMINO: quadrado_gfx(t, x + 6, yb); break;
         case EV_PRAZO_PERDIDO: xis_gfx(t, x, yb + ALT_BARRA / 2); break;
         case EV_SORTEIO: sorteio_gfx(t, x + 7, yb - 7); break;
+        case EV_RECUSA: recusa_gfx(t, x + 8, yb + ALT_BARRA / 2); break;
+        case EV_RECARGA: sinal_gfx(t, x + 8, yb - 7, C_RECARGA, true); break;
+        case EV_DESCARTE: sinal_gfx(t, x + 8, yb - 7, C_DESCARTE, false); break;
         default: break;
         }
     }
@@ -1056,16 +1230,12 @@ void gantt_gfx(Tela *t, const Simulador *s, VistaGantt *v) {
     for (int c = 0; c < ncpu; c++) {
         int y = y_cpus + c * ALT_CPU;
         for (int tk = v->t_ini; tk < t_fim;) {
-            int quem = -1;
-            for (int i = 0; i < n; i++)
-                if (sim_cpu_celula(s, tk, i) == c) { quem = i; break; }
+            int aper, quem = gantt_quem_na_cpu(s, tk, c, &aper);
             bool existe = c < s->ncpus_col[tk];
             int t2 = tk + 1;
             while (t2 < t_fim && (c < s->ncpus_col[t2]) == existe) {
-                int q2 = -1;
-                for (int i = 0; i < n; i++)
-                    if (sim_cpu_celula(s, t2, i) == c) { q2 = i; break; }
-                if (q2 != quem) break;
+                int a2, q2 = gantt_quem_na_cpu(s, t2, c, &a2);
+                if (q2 != quem || a2 != aper) break;
                 t2++;
             }
             int x = x0 + (tk - v->t_ini) * v->cw, w = (t2 - tk) * v->cw;
@@ -1075,10 +1245,12 @@ void gantt_gfx(Tela *t, const Simulador *s, VistaGantt *v) {
                 tela_hachurado(t, x, y, w, ALT_CPU - 6);
             } else {
                 const TCB *k = &e->tarefas[quem];
-                tela_ret(t, x, y, w, ALT_CPU - 6, k->cor);
-                tela_moldura(t, x, y, w, ALT_CPU - 6, 0x222222);
-                char rot[ID_MAX + 8];
-                id_rotulo(k->id, todos_inteiros, rot, sizeof rot);
+                ret_exec_gfx(t, k, x, y, w, ALT_CPU - 6);
+                /* "PS1:A1" se o servidor executava uma aperiódica; se não
+                 * couber, só o id de quem ocupou a CPU */
+                char rot[2 * ID_MAX + 20];
+                rotulo_trecho(e, quem, aper, todos_inteiros, rot, sizeof rot);
+                if (texto_largura(rot) + 2 > w) id_rotulo(k->id, todos_inteiros, rot, sizeof rot);
                 texto_no_meio(t, x, w, y, rot, cor_contraste(k->cor));
             }
             tk = t2;
@@ -1111,7 +1283,10 @@ int gantt_gfx_legenda(Tela *t, int x, int y, int w, bool desenhar) {
     static const char *const textos[] = {
         "executando (nº da CPU)", "pronta", "suspensa", "CPU desligada", "chegada",
         "fim de ativação", "término (10ª ativação)", "perda de prazo", "sorteio (desempate)", "instante atual",
+        "servidor executando", "aperiódica/esporádica executando", "recusada (admissão)", "recarga (SS)",
+        "capacidade descartada (PS)",
     };
+    const TCB serv = {.tipo = TIPO_SERVIDOR, .cor = 0x95A5A6}, aper = {.tipo = TIPO_APERIODICA, .cor = 0xF39C12};
     int n = (int)(sizeof textos / sizeof textos[0]);
     int cx = x, cy = y;
     for (int i = 0; i < n; i++) {
@@ -1137,6 +1312,11 @@ int gantt_gfx_legenda(Tela *t, int x, int y, int w, bool desenhar) {
             case 7: xis_gfx(t, sx + 14, sy + 7); break;
             case 8: sorteio_gfx(t, sx + 14, sy + 7); break;
             case 9: tela_ret(t, sx + 13, sy - 1, 2, 16, C_AGORA); break;
+            case 10: ret_exec_gfx(t, &serv, sx, sy, 28, 14); break;
+            case 11: ret_exec_gfx(t, &aper, sx, sy, 28, 14); break;
+            case 12: recusa_gfx(t, sx + 14, sy + 7); break;
+            case 13: sinal_gfx(t, sx + 14, sy + 7, C_RECARGA, true); break;
+            case 14: sinal_gfx(t, sx + 14, sy + 7, C_DESCARTE, false); break;
             }
             tela_texto(t, cx + 34, cy, textos[i], C_TEXTO);
         }

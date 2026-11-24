@@ -57,6 +57,10 @@ typedef struct {
     int linha;      // Número da linha do arquivo .txt onde a tarefa foi lida (0 se criada na interface)
     char **lista_ev;     // Vetor dinâmico de strings contendo os eventos já separados por ',' ou ';'
     int nev;     // Quantidade total de eventos presentes em lista_ev
+    TipoTarefa tipo;         // Periódica, aperiódica, esporádica ou servidor (config_classificar)
+    TipoServidor servidor;   // Qual servidor, quando tipo == TIPO_SERVIDOR
+    int *ocorr;              // Aperiódica/esporádica: instantes de chegada relativos ao ingresso, lidos de lista_eventos
+    int nocorr;              // Quantidade de instantes em ocorr
 } TarefaCfg;
 
 // Estrutura para acúmulo de mensagens de avisos e erros durante a leitura do arquivo
@@ -71,7 +75,7 @@ typedef struct {
     int algoritmo;         // Índice/Identificador do algoritmo de escalonamento ativo
     int quantum;    // Valor do quantum de tempo em ticks
     int ncpus;       // número de cpus
-    TarefaCfg *tarefas;    // Vetor dinâmico com a configuração de todas as tarefas periódicas
+    TarefaCfg *tarefas;    // Vetor dinâmico com a configuração de todas as tarefas (de todos os tipos)
     int n, cap;        // n = número total de tarefas , cap = capacidade alocada do vetor
     ListaMsg avisos;        // Lista contendo problemas não fatais (ex: tarefa aperiódica) 
     ListaMsg erros;         // Lista contendo erros fatais que impedem a execução
@@ -109,6 +113,15 @@ void config_adicionar(Config *cfg, const TarefaCfg *t);    // Adiciona uma nova 
 void config_definir_eventos(TarefaCfg *t, const char *texto);    // Divide a string de eventos por delimitadores e armazena em lista_ev
 
 void config_liberar_tarefa(TarefaCfg *t);    // Libera a memória associada à string de eventos de uma tarefa
+
+bool config_id_servidor(const char *id, TipoServidor *tipo);    // true se o id indica um servidor (BS, PS, DS ou SS seguido de um número, sem diferenciar maiúsculas); o tipo vai para '*tipo' (pode ser NULL)
+
+void config_classificar(TarefaCfg *t);    // Define t->tipo e t->servidor pelo id e pelo sinal do período (req. B 1.2, 1.3 e 2)
+
+// Lê os instantes de 'eventos' de uma aperiódica ou esporádica: inteiros >= 0, em ordem crescente e, na esporádica, separados por
+// pelo menos |periodo| (req. B 1.3). Sem nenhum instante, a tarefa tem uma ocorrência só, no ingresso. Devolve NULL se deu certo
+// (com o vetor novo em '*out' e o tamanho em '*n', se não forem NULL) ou o motivo da recusa.
+const char *config_ocorrencias(const char *eventos, TipoTarefa tipo, int periodo, int ingresso, int **out, int *n);
 
 const char *config_validar_quantum(int v);    // Valida se o quantum informado é maior que 0
 const char *config_validar_cpus(int v);    // Valida se o número de CPUs está dentro do intervalo permitido (1 a MAX_CPUS)
@@ -199,6 +212,7 @@ void term_bg(unsigned rgb);         // Emite a sequência de escape ANSI para al
 void term_reset(void);              // Emite a sequência de escape ANSI para restaurar as cores e estilos padrão do terminal
 void term_negrito(void);            // Emite a sequência de escape ANSI para ativar o estilo de texto em negrito no terminal
 void term_fraco(void);              // Emite a sequência de escape ANSI para ativar o estilo de texto esmaecido/suave no terminal
+void term_sublinhado(void);         // Emite a sequência de escape ANSI para ativar o texto sublinhado no terminal
 void term_limpar(void);             // Emite a sequência de escape ANSI para limpar a tela do terminal (ativo apenas se g_usar_cores for true)
 int  term_largura(void);            // Retorna a quantidade de colunas da janela do terminal (padrão de 100 colunas)
 

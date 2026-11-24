@@ -20,6 +20,7 @@ typedef struct {
     const char *saida_svg;   // Caminho do arquivo de saída SVG (se NULL, o nome é derivado automaticamente do arquivo de configuração)
     bool texto;              // Flag booleana: se true, também imprime a linha do tempo e eventos em formato de texto no terminal
     uint64_t semente;        // Valor da semente (seed) inicial para o gerador de números aleatórios no sorteio determinístico
+    bool admissao;           // Teste de admissão ligado (req. B 3); false com --sem-admissao
 } OpcoesUI;
 
 // Imprime na tela a tabela formatada com as configurações do sistema, tarefas e taxa de utilização calculada

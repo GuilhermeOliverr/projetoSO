@@ -1,0 +1,9 @@
+# Projeto B: teste de admissão. Com o PS1, a tarefa 2 teria tempo de
+# resposta 8 > prazo 6 (RM): o PS1 é recusado, e as aperiódicas, sem
+# servidor, também. Rode com --sem-admissao para ver tudo entrar.
+RM;2;1
+1;E74C3C;0;1;4;4
+2;3498DB;0;2;6;6
+PS1;95A5A6;0;2;5;5
+A1;F39C12;2;2;0
+A2;2ECC71;8;2;0

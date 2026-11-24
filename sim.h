@@ -40,7 +40,10 @@ typedef enum {
     EV_SORTEIO,        // 4: Evento de aplicação do critério 5 de desempate por sorteio determinístico (sinalizado com ?)
     EV_PREEMPCAO,      // 5: Evento de preempção (tarefa é retirada da CPU para dar lugar a outra mais prioritária)
     EV_FIM_QUANTUM,    // 6: Evento de esgotamento da fatia de tempo (quantum) da tarefa em execução
-    EV_QTD             // 7: Quantidade total de categorias de eventos definidas na enumeração
+    EV_DESCARTE,       // 7: Servidor de polling ganhou a CPU sem aperiódica na fila e perdeu a capacidade do período
+    EV_RECARGA,        // 8: Sporadic Server recebeu de volta a capacidade gasta um período antes
+    EV_RECUSA,         // 9: O teste de admissão recusou a tarefa (no ingresso) ou uma ativação de aperiódica (ao entrar na fila)
+    EV_QTD             // 10: Quantidade total de categorias de eventos definidas na enumeração
 } TipoEvento;
 
 // Início da estrutura que registra um evento ocorrido com seu contexto completo
@@ -53,6 +56,22 @@ typedef struct {
     int cpu;          // Identificador da CPU envolvida na ocorrência do evento (-1 se ocorreu na fila de prontos)
 } Evento;
 
+/* Resultado do teste de admissão (req. B 3, ver admissao.h). */
+typedef enum {
+    ADM_ACEITA,         // o teste garante que todos os prazos continuam sendo cumpridos
+    ADM_SEM_GARANTIA,   // a condição necessária passa, mas nenhum teste suficiente fecha: entra, com aviso
+    ADM_RECUSADA        // não entra no sistema
+} ResultadoAdmissao;
+
+/* Uma decisão do teste de admissão, com o motivo para mostrar ao usuário. */
+typedef struct {
+    int tick;                    // tick em que foi decidida (descartada ao editar o passado, como os eventos)
+    int tarefa;                  // índice da tarefa no vetor de TCBs
+    int ativacao;                // -1 = a tarefa (no ingresso); >= 0 = a ativação da aperiódica que entrou na fila
+    ResultadoAdmissao resultado;
+    char motivo[240];            // teste usado e os números dele
+} RegistroAdmissao;
+
 // Enumeração dos estados visuais de uma célula da grade do Gantt (Vazio, Na Fila, Executando, Suspensa)
 typedef enum { G_VAZIO, G_PRONTA, G_EXEC, G_SUSPENSA } CelulaGantt;
 
@@ -62,6 +81,7 @@ typedef struct {
     int ncpus, quantum;     // Número de CPUs físicas ativas e valor do quantum de tempo configurados no tick 
     int alg;     // Índice do algoritmo de escalonamento ativo no registro de escalonadores (ex: RM ou EDF) 
     uint64_t rng;     // Estado interno de 64 bits do gerador de números aleatórios para manter o determinismo no sorteio 
+    bool admissao;     // Teste de admissão ligado (req. B 3); --sem-admissao desliga
     int n;     // Quantidade total de tarefas existentes no sistema neste instante 
     TCB *tarefas;     // Vetor contendo a cópia do estado de cada TCB no instante do snapshot 
     bool fim;     // Booleana que indica se todas as tarefas completaram suas 10 ativações
@@ -81,12 +101,15 @@ typedef struct {
     Evento *ev;     // Vetor dinâmico com o histórico de todos os eventos registrados durante a simulação 
     int nev, capev;     // Quantidade atual de eventos armazenados e capacidade alocada do vetor de eventos 
     char erro[400];     // Por que o último sim_avancar parou ("" = não parou por erro): o escalonador não conseguiu calcular uma prioridade
+    RegistroAdmissao *adm;     // Decisões do teste de admissão, na ordem em que aconteceram
+    int nadm, capadm;          // Quantidade de decisões e capacidade alocada
 
 } Simulador;
 
 const char *evento_nome(TipoEvento t);    // Retorna o nome em texto descritivo do tipo de evento 't' (usado em logs e legendas)
+const char *admissao_nome(ResultadoAdmissao r);    // "aceita", "aceita sem garantia" ou "recusada"
 
-void sim_iniciar(Simulador *s, const Config *cfg, bool historico, uint64_t semente);    // Inicializa o simulador 's' a partir das configurações 'cfg', aloca estruturas e grava o tick 0
+void sim_iniciar(Simulador *s, const Config *cfg, bool historico, uint64_t semente, bool admissao);    // Inicializa o simulador 's' a partir das configurações 'cfg' (com ou sem o teste de admissão), aloca estruturas e grava o tick 0
 void sim_liberar(Simulador *s);    // Libera toda a memória dinâmica alocada pelo simulador (snapshots, eventos, rastro do Gantt)
 
 bool sim_avancar(Simulador *s);           // Avança 1 tick e salva o snapshot; false se já acabou ou se o escalonador falhou (motivo em s->erro, estado de antes do tick)
@@ -95,7 +118,7 @@ int  sim_ir_para(Simulador *s, int t);    // Desloca o relógio da simulação d
 
 const char *sim_rodar_ate_fim(Simulador *s);    // Executa a simulação continuamente em laço até que todas as tarefas terminem; devolve o motivo se parar antes (limite de ticks, todas suspensas, falha do escalonador)
 
-bool sim_bloqueado(const Estado *e);    // Verifica se o sistema está em deadlock ou bloqueado sem tarefas prontas executáveis
+bool sim_bloqueado(const Estado *e);    // true se nenhuma tarefa restante progride sozinha: todas suspensas pelo usuário, ou aperiódicas sem servidor disponível
 
 void sim_preparar_edicao(Simulador *s);    // Prepara o simulador para edições dinâmicas, preparando o histórico para possíveis truncamentos
 void sim_concluir_edicao(Simulador *s);    // Finaliza o processo de edição dinâmica e trunca o histórico futuro a partir do tick editado
@@ -107,11 +130,15 @@ void tcb_iniciar(TCB *k, const TarefaCfg *t);    // Inicializa a estrutura TCB '
 CelulaGantt sim_celula(const Simulador *s, int tick, int tarefa);    // Consulta e retorna o estado visual da célula (Vazio, Pronta, Executando, Suspensa) no Gantt
 int sim_cpu_celula(const Simulador *s, int tick, int tarefa);    // Consulta e retorna o índice da CPU em que a 'tarefa' executou no 'tick' (-1 se nenhuma)
 
+int sim_fila_aperiodicas(const Estado *e, int *ordem);    // A fila de aperiódicas/esporádicas sem servidor, na ordem em que serão atendidas; os índices vão para 'ordem' (tamanho e->n) e devolve quantas
+const RegistroAdmissao *sim_admissao_tarefa(const Simulador *s, int tarefa);    // A decisão do teste de admissão sobre a tarefa no ingresso (NULL se ainda não houve)
+
 int sim_indice(const Estado *e, const char *id);    // Busca o índice da tarefa no vetor de TCBs a partir do seu 'id' (id_iguais); retorna o ÍNDICE, ou -1 se não encontrar
 
 bool sim_ids_inteiros(const Estado *e);    // true se todos os ids do estado atual são inteiros (rótulos "T<id>"; ver id_rotulo)
 
-double sim_utilizacao(const Estado *e);    // Calcula a taxa de utilização total do processador U = soma(Duração / Período) para o conjunto de tarefas
+double utilizacao_parcela(TipoTarefa tipo, TipoServidor servidor, int duracao, int periodo);    // C/P da tarefa na utilização, ou -1 se ela não entra na soma (aperiódica, esporádica, Background Server)
+double sim_utilizacao(const Estado *e, int *n);    // Utilização total U = soma das parcelas (utilizacao_parcela); em 'n' (pode ser NULL) vai quantas tarefas entraram na soma
 double sim_limite_rm(int n);    // Calcula o limite teórico de escalonabilidade do teste de Liu & Layland para RM: n*(2^(1/n) - 1)
 
 void estado_copiar(Estado *dst, const Estado *src);    // Copia profundamente o estado 'src' para o estado 'dst' (alocando novos TCBs)
@@ -144,6 +171,13 @@ void evento_add(Simulador *s, int tick, int instante, TipoEvento tipo, int taref
 const char *valida_positivo(int v);  // Recebe um inteiro 'v' e verifica se é estritamente positivo (> 0). Usado para duração, período e prazo
 
 const char *valida_periodo(int v);  // Valida se o novo período 'v' cumpre as regras do sistema (> 0)
+
+/* Projeto B: o tipo da tarefa sai do id e do sinal do período (config_classificar). */
+const char *valida_periodo_tarefa(int v, const char *id);    // Tarefa nova: qualquer período (> 0 periódica, 0 aperiódica, < 0 esporádica), menos num servidor, que precisa de > 0
+const char *valida_prazo_tarefa(int v, TipoTarefa tipo);     // Aperiódica: >= 0 (0 = sem prazo); as demais: > 0
+const char *valida_eventos_tarefa(const char *eventos, TipoTarefa tipo, int periodo, int ingresso);    // Aperiódica/esporádica: os instantes de chegada (config_ocorrencias); nas demais, qualquer texto
+const char *valida_periodo_edicao(const TCB *k, int v);
+int prazo_padrao_tipo(TipoTarefa tipo, int periodo);    // Prazo quando não informado: o período (periódica e servidor), |período| (esporádica) ou 0 = sem prazo (aperiódica)    // Durante a simulação o tipo não muda; na esporádica, o novo |período| ainda precisa caber entre as ocorrências
 
 const char *valida_ingresso(int v, int min);  // Garante que o novo instante de ingresso 'v' não seja menor que 'min' (tick atual da simulação)
 

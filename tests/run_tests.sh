@@ -49,14 +49,18 @@ for f in tests/nao_existe.txt tests; do
     fi
 done
 
-# Executa em modo completo e devolve a saída em texto.
-roda() { $BIN "$1" --modo completo --texto --sem-cor --saida "$TMP/g.svg" ${2:+"$@"} 2>&1; }
+# Executa em modo completo e devolve a saída em texto. Opções extras vão depois do arquivo.
+roda() { arq=$1; shift; $BIN "$arq" --modo completo --texto --sem-cor --saida "$TMP/g.svg" "$@" 2>&1; }
 
 echo "== Avisos"
+# Sem nenhum servidor no arquivo, a aperiódica nunca executaria (req. B 1.1):
+# o teste de admissão a recusa no ingresso, mesmo com --sem-admissao.
 roda tests/validos/08_com_aperiodica.txt > "$TMP/out"
-grep -q 'aperiódica (periodo = 0) e foi ignorada' "$TMP/out" && ok "aperiódica ignorada com aviso" \
-    || falha "aperiódica ignorada com aviso"
-grep -q 'T2' "$TMP/out" && falha "aperiódica não deveria aparecer no Gantt" || ok "aperiódica fora do Gantt"
+grep -q 't=0 2: recusada (não há servidor' "$TMP/out" && ok "aperiódica sem servidor recusada com o motivo" \
+    || falha "aperiódica sem servidor recusada com o motivo"
+roda tests/validos/08_com_aperiodica.txt --sem-admissao > "$TMP/out"
+grep -q 't=0 T2 recusada pelo teste de admissão' "$TMP/out" && ok "aperiódica sem servidor recusada mesmo com --sem-admissao" \
+    || falha "aperiódica sem servidor recusada mesmo com --sem-admissao"
 
 echo "== Figura 2.5 (tabela 2.1 com RM)"
 roda exemplos/fig2_5_rm.txt > "$TMP/out"
@@ -66,7 +70,9 @@ grep -q 'CPU0: \[0,20)T1 \[20,60)T2 \[60,100)T3 \[100,120)T1 \[120,150)T3 \[150,
 [ "$(grep -c '10/10' "$TMP/out")" -eq 3 ] && ok "cada tarefa termina após 10 ativações" || falha "10 ativações"
 
 echo "== Figura 2.6 (U = 100%)"
-roda exemplos/fig2_6_rm.txt > "$TMP/out"
+# Com RM, U = 100% não passa no teste de admissão (B seria recusada); para
+# ver a perda de prazo da figura, o teste fica desligado.
+roda exemplos/fig2_6_rm.txt --sem-admissao > "$TMP/out"
 grep -q 't=50 T2 perda de prazo' "$TMP/out" && ok "RM: B perde o prazo em t = 50" || falha "RM: B perde o prazo em t = 50"
 roda exemplos/fig2_6_edf.txt > "$TMP/out"
 grep -q 't=[0-9]* T[0-9]* perda de prazo' "$TMP/out" && falha "EDF não deveria perder prazo" || ok "EDF: nenhum prazo perdido"
@@ -77,7 +83,7 @@ echo "== Perda de prazo de ativação acumulada (sobrecarga)"
 # T2 recebe só 1 de cada 4 ticks e acumula ativações. A 4ª chega em 24 e
 # vence em 32 sem nem ter começado: a perda tem que aparecer em t = 32 (o
 # deadline), e não quando a ativação finalmente começa a executar.
-roda tests/validos/18_ativacoes_acumuladas.txt > "$TMP/out"
+roda tests/validos/18_ativacoes_acumuladas.txt --sem-admissao > "$TMP/out"
 grep -q 't=32 T2 perda de prazo (ativação 4)' "$TMP/out" && grep -q 't=40 T2 perda de prazo (ativação 5)' "$TMP/out" \
     && ok "perda marcada no instante exato do deadline (t = 32 e t = 40)" \
     || falha "perda de ativação acumulada" "$(grep 'perda de prazo' "$TMP/out" | tr '\n' ' ')"
@@ -90,7 +96,7 @@ grep -q 'sorteio' "$TMP/out" && ok "sorteio registrado (critério 5)" || falha "
 roda exemplos/quantum_empate_total.txt > "$TMP/out"
 grep -q 'CPU0: \[0,6)T. \[6,12)T.' "$TMP/out" \
     && ok "fim de quantum não tira a tarefa da CPU (critério 1)" || falha "quantum x critério 1"
-roda exemplos/quantum_respeita_prazo.txt > "$TMP/out"
+roda exemplos/quantum_respeita_prazo.txt --sem-admissao > "$TMP/out"
 grep -q 'CPU0: \[0,4)T1 \[4,8)T2' "$TMP/out" && grep -q 'Nenhum prazo perdido' "$TMP/out" \
     && ok "fim de quantum não passa por cima do critério 2 (prazo)" || falha "quantum x critério 2"
 
@@ -100,7 +106,7 @@ echo "== Desempate: critério 2 usa o prazo relativo"
 # critério 2 compara o prazo relativo (campo 'prazo', ver README "Desempate"):
 # 10 < 20, então T2 vem primeiro. Pelo deadline absoluto empataria e o
 # critério 3 (ingresso) daria T1.
-roda tests/validos/20_desempate_prazo_absoluto.txt > "$TMP/out"
+roda tests/validos/20_desempate_prazo_absoluto.txt --sem-admissao > "$TMP/out"
 grep -q 'CPU0: \[0,12)T3 \[12,15)T2 \[15,18)T1' "$TMP/out" \
     && ok "mesmo deadline absoluto: o critério 2 (menor prazo relativo) escolhe T2" \
     || falha "critério 2 (prazo relativo)" "$(grep 'CPU0:' "$TMP/out" | head -1 | cut -c1-100)"
@@ -125,10 +131,10 @@ printf 'g 60\nx %s/ida.svg\ng 150\np 50\np 40\nx %s/volta.svg\nq\n' "$TMP" "$TMP
     | $BIN exemplos/fig2_5_rm.txt --modo passo --sem-cor > "$TMP/out" 2>&1
 cmp -s "$TMP/ida.svg" "$TMP/volta.svg" && ok "voltar para t = 60 reproduz exatamente o mesmo Gantt" \
     || falha "retroceder deveria reproduzir o estado"
-printf 'g 30\ne 1\n6\n0\n5\nq\n' | $BIN exemplos/fig2_6_rm.txt --modo passo --sem-cor > "$TMP/out" 2>&1
+printf 'g 30\ne 1\n6\n0\n5\nq\n' | $BIN exemplos/fig2_6_rm.txt --modo passo --sem-cor --sem-admissao > "$TMP/out" 2>&1
 grep -q 'não tem ativação em andamento' "$TMP/out" && ok "edição inválida recusada com motivo" \
     || falha "edição inválida deveria ser recusada"
-printf 'g 25\ne 2\n7\nn 10\nt 2\nq\n' | $BIN exemplos/fig2_6_rm.txt --modo passo --sem-cor > "$TMP/out" 2>&1
+printf 'g 25\ne 2\n7\nn 10\nt 2\nq\n' | $BIN exemplos/fig2_6_rm.txt --modo passo --sem-cor --sem-admissao > "$TMP/out" 2>&1
 grep -q 'suspensa 10 tick' "$TMP/out" && grep -q '░' "$TMP/out" && ok "suspensão aparece no estado e no Gantt" \
     || falha "suspensão"
 
@@ -200,6 +206,82 @@ printf 'n 5\n+\nX\n\n\n\n\n\n\nt X\n\np 3\nt X\nq\n' | $BIN exemplos/fig2_5_rm.t
 grep -q 'Tarefa X adicionada' "$TMP/out" && grep -q 'Tarefa X (TCB)' "$TMP/out" \
     && grep -q 'não existe tarefa com id X neste instante' "$TMP/out" \
     && ok "tarefa 'X' adicionada no passo a passo e desfeita ao voltar no tempo" || falha "adicionar tarefa de id texto"
+
+echo "== Projeto B: servidores (linhas do tempo calculadas à mão nos comentários dos exemplos)"
+# BS: só usa CPU ociosa. Em t = 3 a fila tem A1 (chegou em 1) e E1 (em 2);
+# a esporádica passa na frente: E1 de 3 a 5, A1 de 7 a 10 (T1 volta em 5).
+roda exemplos/b_background_server.txt > "$TMP/out"
+grep -q 'CPU0: \[0,2)1 \[2,3)2 \[3,5)BS1:E1 \[5,7)1 \[7,10)BS1:A1 \[10,12)1' "$TMP/out" \
+    && ok "BS: esporádica antes da aperiódica, só nos ticks ociosos" || falha "BS" "$(grep 'CPU0:' "$TMP/out" | head -1 | cut -c1-120)"
+grep -q 't=2 E1: aceita sem garantia (só há Background Server' "$TMP/out" \
+    && ok "esporádica só com BS: aceita sem garantia" || falha "esporádica só com BS"
+# PS (1 a cada 5): em t = 1 ganha a CPU com a fila vazia e descarta; em 5
+# atende E1, em 10 uma parte de A1 (a capacidade acaba), em 15 a 2ª de E1.
+roda exemplos/b_polling_server.txt > "$TMP/out"
+grep -q 'CPU0: \[0,1)1 \[1,3)2 \[3,4)desligada \[4,5)1 \[5,6)PS1:E1 \[6,8)desligada \[8,9)1 \[9,10)2 \[10,11)PS1:A1 \[11,12)2 \[12,13)1 \[13,15)desligada \[15,16)PS1:E1 \[16,17)1 \[17,19)2 \[19,20)desligada \[20,21)1 \[21,22)PS1:A1' "$TMP/out" \
+    && ok "PS: capacidade por período, atende na ordem da fila" || falha "PS" "$(grep 'CPU0:' "$TMP/out" | head -1 | cut -c1-120)"
+grep -q 't=1 PS1 capacidade descartada' "$TMP/out" && ok "PS: fila vazia ao ganhar a CPU descarta a capacidade" \
+    || falha "PS: descarte da capacidade"
+# DS (1 a cada 5): guarda a capacidade e atende A1 assim que ela chega (2),
+# tirando a CPU de T2 (prioridade 5 contra 8).
+roda exemplos/b_deferrable_server.txt > "$TMP/out"
+grep -q 'CPU0: \[0,1)1 \[1,2)2 \[2,3)DS1:A1 \[3,4)2 \[4,5)1 \[5,6)DS1:A1 \[6,8)desligada \[8,9)1 \[9,10)2 \[10,11)DS1:A2 \[11,12)2' "$TMP/out" \
+    && ok "DS: guarda a capacidade e atende na chegada" || falha "DS" "$(grep 'CPU0:' "$TMP/out" | head -1 | cut -c1-120)"
+grep -q 'DS1: aceita (RM, análise do tempo de resposta: .*R = 6)' "$TMP/out" \
+    && ok "DS na admissão: jitter T-C na análise do tempo de resposta (R = 6 para T2)" || falha "DS na admissão"
+# SS (4 a cada 8, EDF): ativo em 1 (gasta 2, volta em 9), em 4 (gasta 2,
+# volta em 12), em 9 (gasta 2, volta em 17) e em 12 (gasta 1, volta em 20).
+roda exemplos/b_sporadic_server.txt > "$TMP/out"
+grep -q 'CPU0: \[0,1)1 \[1,3)SS1:A1 \[3,5)1 \[5,7)SS1:A2 \[7,9)desligada \[9,11)SS1:A2 \[11,14)1 \[14,15)SS1:A2' "$TMP/out" \
+    && ok "SS: executa com a capacidade que tem" || falha "SS" "$(grep 'CPU0:' "$TMP/out" | head -1 | cut -c1-120)"
+[ "$(grep -o 't=[0-9]* SS1 recarga' "$TMP/out" | tr '\n' ' ')" = "t=9 SS1 recarga t=12 SS1 recarga t=17 SS1 recarga t=20 SS1 recarga " ] \
+    && ok "SS: recargas em 9, 12, 17 e 20 (um período depois de ficar ativo)" \
+    || falha "SS: recargas" "$(grep -o 't=[0-9]* SS1 recarga' "$TMP/out" | tr '\n' ' ')"
+# Uma esporádica que chega tira a aperiódica do servidor (troca de dono).
+printf 'RM;2;1\n1;E74C3C;0;2;20;20\nDS1;95A5A6;0;3;10;10\nA1;F39C12;0;5;0\nE1;2ECC71;2;1;-20;20\n' > "$TMP/troca.txt"
+roda "$TMP/troca.txt" > "$TMP/out"
+grep -q 'CPU0: \[0,2)DS1:A1 \[2,3)DS1:E1 \[3,5)1' "$TMP/out" \
+    && ok "esporádica que chega tira a aperiódica do servidor" || falha "troca no servidor" "$(grep 'CPU0:' "$TMP/out" | head -1 | cut -c1-80)"
+
+echo "== Projeto B: teste de admissão"
+# Com o PS1 (2 a cada 5), R de T2 = 2 + teto(R/4)*1 + teto(R/5)*2: 2, 5, 6, 8 > 6.
+roda exemplos/b_admissao_recusa.txt > "$TMP/out"
+grep -q 't=0 PS1: recusada (RM, análise do tempo de resposta: com ela, 2 teria tempo de resposta 8 > prazo = 6)' "$TMP/out" \
+    && ok "PS1 recusado pela análise do tempo de resposta (R = 8 > 6)" || falha "recusa do PS1"
+grep -q 't=2 A1: recusada (não há servidor' "$TMP/out" && ok "aperiódica sem servidor (o PS1 foi recusado) também é recusada" \
+    || falha "aperiódica sem servidor"
+grep -q 'PS1' "$TMP/out" && grep -q 't=0 PS1 recusada pelo teste de admissão' "$TMP/out" && ok "a recusa vira um evento" \
+    || falha "evento de recusa"
+grep -q 'class="recusa"' "$TMP/g.svg" && ok "a recusa tem marcador no SVG" || falha "marcador de recusa no SVG"
+roda exemplos/b_admissao_recusa.txt --sem-admissao > "$TMP/out"
+grep -q 'PS1:A1' "$TMP/out" && ! grep -q 'recusada pelo teste' "$TMP/out" && ok "--sem-admissao: tudo entra e o PS1 executa A1" \
+    || falha "--sem-admissao"
+# Aperiódica com prazo: o PS1 (1 a cada 10) pode ficar 18 ticks sem entregar
+# nada; A1 pede 3 em 5 (recusada) e A2 pede 3 em 40 (garantido = 3, aceita).
+roda exemplos/b_aperiodica_com_prazo.txt > "$TMP/out"
+grep -q 't=0 A1 (ativação 1): recusada' "$TMP/out" && grep -q 't=0 A2 (ativação 1): aceita' "$TMP/out" \
+    && ok "ativação de aperiódica com prazo testada ao entrar na fila" || falha "teste da ativação aperiódica"
+grep -q 't=21 A2 término' "$TMP/out" && ! grep -q 'A2 perda de prazo' "$TMP/out" \
+    && ok "a ativação aceita cumpre o prazo (termina em 21 <= 40)" || falha "prazo da ativação aceita"
+roda exemplos/fig2_6_rm.txt > "$TMP/out"
+grep -q 't=0 2: recusada (RM, análise do tempo de resposta: ela teria tempo de resposta 55 > prazo = 50)' "$TMP/out" \
+    && ok "fig. 2.6 com RM: B recusada (R = 55 > 50)" || falha "fig. 2.6 na admissão"
+
+echo "== Projeto B: Gantt e interface"
+roda exemplos/b_polling_server.txt > "$TMP/out"
+grep -q 'class="exec serv"' "$TMP/g.svg" && grep -q 'class="exec aper"' "$TMP/g.svg" && grep -q 'id="listras"' "$TMP/g.svg" \
+    && ok "SVG: servidor listrado e aperiódica com borda tracejada" || falha "SVG do Projeto B"
+printf 'g 4\ns\n\nt PS1\n\nt A1\n\nd\n\nq\n' | $BIN exemplos/b_polling_server.txt --modo passo --sem-cor > "$TMP/out" 2>&1
+grep -q 'fila de aperiódicas: E1 (esp., chegou em 3) A1 (aper., chegou em 2)' "$TMP/out" \
+    && ok "passo a passo: fila de aperiódicas na ordem de atendimento (esporádica primeiro)" || falha "fila no comando s"
+grep -q 'capacidade restante: 0 de 1' "$TMP/out" && grep -q 'na fila de aperiódicas: posição 2 de 2' "$TMP/out" \
+    && ok "passo a passo: TCB do servidor e da aperiódica" || falha "comando t do Projeto B"
+grep -q 'Teste de admissão:' "$TMP/out" && ok "passo a passo: comando d lista as decisões" || falha "comando d"
+# A edição não pode trocar o tipo; a esporádica confere o intervalo mínimo.
+printf 'g 4\ne PS1\n3\n0\n5\ne E1\n3\n-20\n-12\nq\n' | $BIN exemplos/b_polling_server.txt --modo passo --sem-cor > "$TMP/out" 2>&1
+grep -q 'mudar o tipo da tarefa durante a simulação não é permitido' "$TMP/out" \
+    && grep -q 'menos que o novo intervalo mínimo (20)' "$TMP/out" \
+    && ok "edição: período não troca o tipo; esporádica confere as ocorrências" || falha "edição com tipos"
 
 echo "== Plugin dinâmico"
 if [ -f exemplo_fifo.so ]; then

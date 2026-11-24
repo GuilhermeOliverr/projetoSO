@@ -28,6 +28,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "sim.h"
+#include "admissao.h"
 #include "gantt.h"
 #include "gfx.h"
 #include "ui.h"
@@ -277,7 +278,7 @@ static void fmsg(char *dst, size_t tam, const char *fmt, ...) {
 /* ---- listas de linhas (painéis de detalhes, estatísticas, ajuda) ---- */
 
 typedef struct {
-    char txt[256];
+    char txt[512];    /* cabe o motivo do teste de admissão inteiro */
     uint32_t cor;
     bool negrito;
     long amostra;     /* cor de um quadradinho antes do texto; -1 = nenhum,
@@ -790,6 +791,7 @@ typedef struct {
     int min_ingresso;
     TarefaCfg res;       /* resultado já validado */
     int prazo_antigo, periodo_antigo;
+    TipoTarefa tipo_antigo;
 } CtxTarefa;
 
 enum { CT_ID, CT_COR, CT_INGRESSO, CT_DURACAO, CT_PERIODO, CT_PRAZO, CT_EVENTOS, CT_N };
@@ -819,15 +821,23 @@ static const char *val_tarefa(Campo *c, int n, void *ctx, int *ce) {
     if ((m = campo_int(&c[CT_DURACAO], &t->duracao))) { *ce = CT_DURACAO; return m; }
     if ((m = valida_positivo(t->duracao))) { *ce = CT_DURACAO; return com_rotulo(&c[CT_DURACAO], m); }
     if ((m = campo_int(&c[CT_PERIODO], &t->periodo))) { *ce = CT_PERIODO; return m; }
-    if ((m = valida_periodo(t->periodo))) { *ce = CT_PERIODO; return com_rotulo(&c[CT_PERIODO], m); }
+    if ((m = valida_periodo_tarefa(t->periodo, t->id))) { *ce = CT_PERIODO; return com_rotulo(&c[CT_PERIODO], m); }
+    config_classificar(t);   /* o tipo sai do id e do sinal do período (Projeto B) */
     if ((m = campo_int(&c[CT_PRAZO], &t->prazo))) { *ce = CT_PRAZO; return m; }
     /* Se o prazo acompanhava o período (prazo implícito) e o usuário só
      * mexeu no período, o prazo continua acompanhando (igual ao terminal). */
-    if (t->prazo == k->prazo_antigo && k->prazo_antigo == k->periodo_antigo && t->periodo != k->periodo_antigo) {
-        t->prazo = t->periodo;
+    if (t->prazo == k->prazo_antigo && k->prazo_antigo == prazo_padrao_tipo(k->tipo_antigo, k->periodo_antigo) &&
+        t->periodo != k->periodo_antigo) {
+        t->prazo = prazo_padrao_tipo(t->tipo, t->periodo);
         snprintf(c[CT_PRAZO].valor, sizeof c[CT_PRAZO].valor, "%d", t->prazo);
     }
-    if ((m = valida_positivo(t->prazo))) { *ce = CT_PRAZO; return com_rotulo(&c[CT_PRAZO], m); }
+    if ((m = valida_prazo_tarefa(t->prazo, t->tipo))) { *ce = CT_PRAZO; return com_rotulo(&c[CT_PRAZO], m); }
+    char ev[sizeof c[CT_EVENTOS].valor];
+    snprintf(ev, sizeof ev, "%s", c[CT_EVENTOS].valor);
+    if ((m = valida_eventos_tarefa(str_trim(ev), t->tipo, t->periodo, t->ingresso))) {
+        *ce = CT_EVENTOS;
+        return com_rotulo(&c[CT_EVENTOS], m);
+    }
     return NULL;
 }
 
@@ -836,8 +846,9 @@ static const char *val_tarefa(Campo *c, int n, void *ctx, int *ce) {
 static bool form_tarefa(const char *titulo, TarefaCfg *t, const char *const *ids, int nids, int proprio,
                         int min_ingresso, char *eventos, size_t tam_ev) {
     Campo c[CT_N] = {
-        {"id", "", false}, {"cor (RGB hex)", "", false}, {"ingresso", "", false}, {"duração (C)", "", false},
-        {"período (P)", "", false}, {"prazo (D)", "", false}, {"eventos", "", false},
+        {"id", "", false}, {"cor (RGB hex)", "", false}, {"ingresso", "", false}, {"duração (C; capacidade, no servidor)", "", false},
+        {"período (P; 0 aperiódica, < 0 esporádica)", "", false}, {"prazo (D; 0 = aperiódica sem prazo)", "", false},
+        {"eventos (aperiódica/esporádica: instantes de chegada)", "", false},
     };
     snprintf(c[CT_ID].valor, sizeof c[0].valor, "%s", t->id);
     snprintf(c[CT_COR].valor, sizeof c[0].valor, "%06X", t->cor);
@@ -846,9 +857,12 @@ static bool form_tarefa(const char *titulo, TarefaCfg *t, const char *const *ids
     snprintf(c[CT_PERIODO].valor, sizeof c[0].valor, "%d", t->periodo);
     snprintf(c[CT_PRAZO].valor, sizeof c[0].valor, "%d", t->prazo);
     snprintf(c[CT_EVENTOS].valor, sizeof c[0].valor, "%s", t->eventos ? t->eventos : "");
-    CtxTarefa k = {ids, nids, proprio, min_ingresso, *t, t->prazo, t->periodo};
+    CtxTarefa k = {ids, nids, proprio, min_ingresso, *t, t->prazo, t->periodo, t->tipo};
     Linhas intro = {0};
     lin_add(&intro, C_FRACO, false, "Os valores sugeridos já vêm preenchidos; Tab passa para o próximo campo.");
+    lin_add(&intro, C_FRACO, false, "Tipo: período > 0 periódica, 0 aperiódica, < 0 esporádica (|P| = intervalo mínimo);");
+    lin_add(&intro, C_FRACO, false, "id BSxx, PSxx, DSxx ou SSxx = servidor. Na aperiódica e na esporádica, os eventos são os");
+    lin_add(&intro, C_FRACO, false, "instantes de chegada relativos ao ingresso (ex.: 0,20,45; vazio = só no ingresso).");
     if (min_ingresso > 0) lin_add(&intro, C_FRACO, false, "A simulação está no instante %d: o ingresso deve ser >= %d.", min_ingresso, min_ingresso);
     int r = formulario(titulo, &intro, c, CT_N, val_tarefa, &k, NULL, 0);
     lin_liberar(&intro);
@@ -1067,7 +1081,7 @@ static bool navegar(const Navegador *nv, bool pode_voltar, const char *pasta, co
 
     while (!fechar) {
         novo_quadro();
-        int y = cabecalho(nv->titulo, "Simulador de escalonamento de tempo real (RM / EDF) - Projeto A");
+        int y = cabecalho(nv->titulo, "Simulador de escalonamento de tempo real (RM / EDF) - Projeto B");
         int x = 16, w = T.w - 32;
         y += 12;
 
@@ -1308,7 +1322,7 @@ static int tela_config(Config *cfg) {
     int rol = 0, rol_avisos = 0;
     while (!fechar) {
         novo_quadro();
-        int y = cabecalho("Configuração da simulação", "Simulador de escalonamento de tempo real (RM / EDF) - Projeto A");
+        int y = cabecalho("Configuração da simulação", "Simulador de escalonamento de tempo real (RM / EDF) - Projeto B");
         int x = 16, w = T.w - 32;
         y += 12;
 
@@ -1342,8 +1356,16 @@ static int tela_config(Config *cfg) {
         /* tarefas */
         Linhas util = {0};
         double u = 0;
-        for (int i = 0; i < cfg->n; i++) u += (double)cfg->tarefas[i].duracao / cfg->tarefas[i].periodo;
-        linhas_utilizacao(&util, cfg->n, u, cfg->algoritmo);
+        int nu = 0;   /* quantas entram na utilização (o n do limite do RM) */
+        for (int i = 0; i < cfg->n; i++) {
+            const TarefaCfg *tc = &cfg->tarefas[i];
+            double p = utilizacao_parcela(tc->tipo, tc->servidor, tc->duracao, tc->periodo);
+            if (p >= 0) {
+                u += p;
+                nu++;
+            }
+        }
+        linhas_utilizacao(&util, nu, u, cfg->algoritmo);
         int h_util = linhas_visuais(&util, w - 24) * LINHA + 10;
         /* avisos do arquivo (ex.: eventos lidos e guardados), com
          * quebra de linha; até 6 linhas, o resto rola com a roda do mouse */
@@ -1355,15 +1377,15 @@ static int tela_config(Config *cfg) {
         int h_tab = T.h - y - 10 - h_msg - (ALT_BOTAO + 24);
         if (h_tab < 150) h_tab = 150;
         painel(x, y, w, h_tab);
-        snprintf(lin, sizeof lin, "Tarefas (%d periódicas)", cfg->n);
+        snprintf(lin, sizeof lin, "Tarefas (%d)", cfg->n);
         titulo_painel(x, y, lin);
         int wn = largura_botao("+ Nova tarefa");
         botao(x + w - 12 - wn, y + 6, wn, "+ Nova tarefa", C_NOVA, true, B_NORMAL);
         /* colunas da tabela. A do id tem 60 px; se algum id (texto) não
          * couber, ela cresce e empurra as outras, em vez de o id ficar por
          * cima da cor. Com ids curtos (números) nada muda. */
-        static const char *const cab[] = {"id", "cor", "ingresso", "duração", "período", "prazo", "eventos"};
-        int col[] = {24, 84, 190, 280, 370, 460, 540};
+        static const char *const cab[] = {"id", "tipo", "cor", "ingresso", "duração", "período", "prazo", "eventos"};
+        int col[] = {24, 84, 190, 296, 386, 476, 566, 646};
         int larg_id = 0;
         for (int i = 0; i < cfg->n; i++) {
             int l = texto_largura(cfg->tarefas[i].id) + 1 + 12;   /* +1 do negrito, +12 de espaço */
@@ -1371,16 +1393,16 @@ static int tela_config(Config *cfg) {
         }
         int extra = larg_id - (col[1] - col[0]);
         if (extra > 0)
-            for (int c = 1; c < 7; c++) col[c] += extra;
+            for (int c = 1; c < 8; c++) col[c] += extra;
         int ty = y + 40;
-        for (int c = 0; c < 7; c++) tela_texto_negrito(&T, x + col[c], ty, cab[c], C_FRACO);
+        for (int c = 0; c < 8; c++) tela_texto_negrito(&T, x + col[c], ty, cab[c], C_FRACO);
         tela_ret(&T, x + 12, ty + 20, w - 24, 1, C_BORDA);
         int ly = ty + 26;
         int lh = h_tab - (ly - y) - h_util - h_avisos - 6;
         int cabem = lh / 30;
         if (cabem < 1) cabem = 1;
         area_rolagem(x, ly, w, cabem * 30, &rol, cfg->n - cabem);
-        if (cfg->n == 0) tela_texto(&T, x + 24, ly + 6, "Nenhuma tarefa periódica. Use \"+ Nova tarefa\" ou abra outro arquivo.", C_FRACO);
+        if (cfg->n == 0) tela_texto(&T, x + 24, ly + 6, "Nenhuma tarefa. Use \"+ Nova tarefa\" ou abra outro arquivo.", C_FRACO);
         int we = largura_botao("Editar"), wr = largura_botao("Remover");
         for (int i = rol, j = 0; i < cfg->n && j < cabem; i++, j++) {
             const TarefaCfg *t = &cfg->tarefas[i];
@@ -1389,16 +1411,17 @@ static int tela_config(Config *cfg) {
             char v[64];
             snprintf(v, sizeof v, "%s", t->id);
             tela_texto_negrito(&T, x + col[0], ry + 7, v, t->cor);
-            tela_ret(&T, x + col[1], ry + 7, 18, 16, t->cor);
-            tela_moldura(&T, x + col[1], ry + 7, 18, 16, 0x555555);
+            tela_texto(&T, x + col[1], ry + 7, tipo_nome_de(t->tipo, t->servidor), C_TEXTO);
+            tela_ret(&T, x + col[2], ry + 7, 18, 16, t->cor);
+            tela_moldura(&T, x + col[2], ry + 7, 18, 16, 0x555555);
             snprintf(v, sizeof v, "%06X", t->cor);
-            tela_texto(&T, x + col[1] + 24, ry + 7, v, C_TEXTO);
+            tela_texto(&T, x + col[2] + 24, ry + 7, v, C_TEXTO);
             int nums[4] = {t->ingresso, t->duracao, t->periodo, t->prazo};
             for (int c = 0; c < 4; c++) {
                 snprintf(v, sizeof v, "%d", nums[c]);
-                tela_texto(&T, x + col[2 + c], ry + 7, v, C_TEXTO);
+                tela_texto(&T, x + col[3 + c], ry + 7, v, C_TEXTO);
             }
-            texto_cortado(x + col[6], ry + 7, w - col[6] - we - wr - 40, t->eventos && *t->eventos ? t->eventos : "-", C_TEXTO);
+            texto_cortado(x + col[7], ry + 7, w - col[7] - we - wr - 40, t->eventos && *t->eventos ? t->eventos : "-", C_TEXTO);
             botao(x + w - 12 - wr, ry + 1, wr, "Remover", C_REMOVER + i, true, B_PERIGO);
             botao(x + w - 18 - wr - we, ry + 1, we, "Editar", C_EDITAR + i, true, B_NORMAL);
         }
@@ -1437,7 +1460,7 @@ static int tela_config(Config *cfg) {
         case C_PASSO:
         case C_COMPLETA:
             if (cfg->n == 0) {
-                fmsg(msg, sizeof msg, "erro: não há tarefas periódicas para simular; use \"+ Nova tarefa\" ou abra outro arquivo");
+                fmsg(msg, sizeof msg, "erro: não há tarefas para simular; use \"+ Nova tarefa\" ou abra outro arquivo");
                 break;
             }
             return acao == C_PASSO ? 'a' : 'b';
@@ -1473,7 +1496,8 @@ static int tela_config(Config *cfg) {
         case C_NOVA: {
             const char **ids = ids_cfg(cfg);
             TarefaCfg t = {"", config_cor_padrao(cfg->n), PADRAO_INGRESSO,
-                           PADRAO_DURACAO, PADRAO_PERIODO, PADRAO_PERIODO, NULL, 0, NULL, 0};
+                           PADRAO_DURACAO, PADRAO_PERIODO, PADRAO_PERIODO, NULL, 0, NULL, 0,
+                           TIPO_PERIODICA, SERV_BS, NULL, 0};
             id_sugerir(ids, cfg->n, t.id, sizeof t.id);
             char ev_txt[512];
             if (form_tarefa("Nova tarefa", &t, ids, cfg->n, -1, 0, ev_txt, sizeof ev_txt)) {
@@ -1506,6 +1530,7 @@ static int tela_config(Config *cfg) {
                     t.lista_ev = dst->lista_ev;
                     t.nev = dst->nev;
                     *dst = t;
+                    config_classificar(dst);   /* o período (ou o id) pode ter mudado o tipo */
                     config_definir_eventos(dst, ev_txt);
                     fmsg(msg, sizeof msg, "Tarefa %s alterada.", t.id);
                 }
@@ -1582,26 +1607,32 @@ static void linhas_tick(const Sessao *z, const Simulador *vis, Linhas *L) {
     bool todos_inteiros = sim_ids_inteiros(e);
     char rot[ID_MAX + 8];
     for (int c = 0; c < vis->ncpus_col[t]; c++) {
-        int quem = -1;
-        for (int i = 0; i < e->n; i++)
-            if (sim_cpu_celula(vis, t, i) == c) quem = i;
+        int aper, quem = gantt_quem_na_cpu(vis, t, c, &aper);
         if (quem >= 0) {
             id_rotulo(e->tarefas[quem].id, todos_inteiros, rot, sizeof rot);
-            lin_add(L, C_TEXTO, false, "CPU%d: tarefa %s", c, rot);
+            if (aper >= 0) {   /* servidor executando uma aperiódica */
+                char ra[ID_MAX + 8];
+                id_rotulo(e->tarefas[aper].id, todos_inteiros, ra, sizeof ra);
+                lin_add(L, C_TEXTO, false, "CPU%d: servidor %s executando a %s %s", c, rot, tipo_nome(&e->tarefas[aper]), ra);
+            } else {
+                lin_add(L, C_TEXTO, false, "CPU%d: tarefa %s", c, rot);
+            }
             L->v[L->n - 1].amostra = e->tarefas[quem].cor;
         } else {
             lin_add(L, C_FRACO, false, "CPU%d: desligada (nenhuma tarefa pronta)", c);
         }
     }
-    char prontas[200] = "";
+    char prontas[200] = "", aperiodicas[200] = "";
     for (int i = 0; i < e->n; i++)
         if (sim_celula(vis, t, i) == G_PRONTA) {
             char id[sizeof rot + 1];   /* " " + rótulo */
             id_rotulo(e->tarefas[i].id, todos_inteiros, rot, sizeof rot);
             snprintf(id, sizeof id, " %s", rot);
-            if (strlen(prontas) + strlen(id) < sizeof prontas) strcat(prontas, id);
+            char *dst = tcb_eh_atendida(&e->tarefas[i]) ? aperiodicas : prontas;
+            if (strlen(dst) + strlen(id) < sizeof prontas) strcat(dst, id);
         }
     lin_add(L, C_TEXTO, false, "Prontas esperando CPU:%s", *prontas ? prontas : " (nenhuma)");
+    if (*aperiodicas) lin_add(L, C_TEXTO, false, "Aperiódicas esperando um servidor:%s", aperiodicas);
     bool algum = false;
     for (int j = 0; j < vis->nev; j++) {
         const Evento *ev = &vis->ev[j];
@@ -1609,12 +1640,86 @@ static void linhas_tick(const Sessao *z, const Simulador *vis, Linhas *L) {
         if (!algum) lin_add(L, C_TEXTO, true, "Eventos:");
         algum = true;
         id_rotulo(e->tarefas[ev->tarefa].id, todos_inteiros, rot, sizeof rot);
-        lin_add(L, ev->tipo == EV_PRAZO_PERDIDO ? C_ERRO : C_TEXTO, ev->tipo == EV_PRAZO_PERDIDO,
+        bool ruim = ev->tipo == EV_PRAZO_PERDIDO || ev->tipo == EV_RECUSA;
+        lin_add(L, ruim ? C_ERRO : C_TEXTO, ruim,
                 "  instante %d: %s %s%s", ev->instante, rot, evento_nome(ev->tipo),
                 ev->tipo == EV_PRAZO_PERDIDO ? "!" : "");
     }
     if (!algum) lin_add(L, C_FRACO, false, "Nenhum evento neste tick.");
     lin_add(L, C_FRACO, false, "Clique numa coluna do gráfico para ver outro tick.");
+}
+
+/* A parte do TCB que depende do tipo (Projeto B), como o comando t do
+ * terminal: capacidade e aperiódica do servidor, recargas do Sporadic
+ * Server, ocorrências e lugar na fila da aperiódica, decisão do teste de
+ * admissão. */
+static void linhas_tipo(const Sessao *z, int i, Linhas *L) {
+    const Estado *e = &z->s.atual;
+    const TCB *k = &e->tarefas[i];
+    char extra[96] = "";
+    if (k->tipo == TIPO_ESPORADICA) snprintf(extra, sizeof extra, " (intervalo mínimo entre ocorrências: %d)", -k->periodo);
+    if (k->tipo == TIPO_APERIODICA && k->prazo <= 0) snprintf(extra, sizeof extra, " (sem prazo)");
+    if (tcb_eh_servidor(k) && k->servidor != SERV_BS)
+        snprintf(extra, sizeof extra, " (capacidade %d a cada %d tick(s))", k->duracao, k->periodo);
+    lin_add(L, C_TEXTO, false, "Tipo: %s%s", tipo_nome(k), extra);
+    if (tcb_eh_servidor(k)) {
+        if (k->servidor != SERV_BS) lin_add(L, C_TEXTO, false, "Capacidade restante: %d de %d", k->capacidade, k->duracao);
+        lin_add(L, C_TEXTO, false, "Executando a aperiódica: %s", k->atendendo >= 0 ? e->tarefas[k->atendendo].id : "nenhuma");
+        if (k->servidor == SERV_SS) {
+            if (k->ss_ativo_desde >= 0)
+                lin_add(L, C_TEXTO, false, "Ativo desde o instante %d (gastou %d; volta no instante %d)", k->ss_ativo_desde,
+                        k->ss_consumo, k->ss_ativo_desde + k->periodo);
+            char rec[200] = "";
+            for (int j = 0; j < k->nrecargas; j++) {
+                char item[48];
+                snprintf(item, sizeof item, "%s+%d no instante %d", j ? ", " : "", k->recargas[j].quantidade, k->recargas[j].instante);
+                if (strlen(rec) + strlen(item) < sizeof rec) strcat(rec, item);
+            }
+            lin_add(L, C_TEXTO, false, "Recargas agendadas: %s", *rec ? rec : "nenhuma");
+        }
+    }
+    if (tcb_eh_atendida(k)) {
+        char oc[200] = "";
+        for (int j = 0; j < k->nocorrencias && j < 20; j++) {
+            char item[16];
+            snprintf(item, sizeof item, " %d", k->ocorrencias[j]);
+            strcat(oc, item);
+        }
+        lin_add(L, C_TEXTO, false, "Ocorrências (relativas ao ingresso %d):%s%s", k->ingresso, oc, k->nocorrencias > 20 ? " ..." : "");
+        if (k->restante > 0 && k->atendida_por >= 0) {
+            lin_add(L, C_TEXTO, false, "Com o servidor %s", e->tarefas[k->atendida_por].id);
+        } else if (k->restante > 0 && (k->estado == T_PRONTA || k->estado == T_EXECUTANDO)) {
+            int *fila = xmalloc((size_t)(e->n ? e->n : 1) * sizeof *fila);
+            int nf = sim_fila_aperiodicas(e, fila), pos = 0;
+            for (int j = 0; j < nf; j++)
+                if (fila[j] == i) pos = j + 1;
+            free(fila);
+            lin_add(L, C_TEXTO, false, "Na fila de aperiódicas: posição %d de %d", pos, nf);
+        }
+        if (k->recusas) lin_add(L, C_AVISO, false, "Ativações recusadas pelo teste de admissão: %d", k->recusas);
+    }
+    const RegistroAdmissao *r = sim_admissao_tarefa(&z->s, i);
+    if (r)
+        lin_add(L, r->resultado == ADM_RECUSADA ? C_ERRO : r->resultado == ADM_SEM_GARANTIA ? C_AVISO : C_TEXTO, false,
+                "Teste de admissão (instante %d): %s (%s)", r->tick, admissao_nome(r->resultado), r->motivo);
+    else if (!k->admitida && k->estado != T_TERMINADA)
+        lin_add(L, C_FRACO, false, "Teste de admissão: no ingresso (instante %d)", k->ingresso);
+}
+
+/* Decisões do teste de admissão (como o comando d do terminal). */
+static void linhas_admissao(const Simulador *s, Linhas *L) {
+    if (s->nadm == 0) return;
+    lin_add(L, C_TEXTO, false, "");
+    lin_add(L, C_TEXTO, true, "Teste de admissão");
+    for (int i = 0; i < s->nadm; i++) {
+        const RegistroAdmissao *r = &s->adm[i];
+        const TCB *k = &s->atual.tarefas[r->tarefa];
+        char ativ[32] = "";
+        if (r->ativacao >= 0) snprintf(ativ, sizeof ativ, " (ativação %d)", r->ativacao + 1);
+        lin_add(L, r->resultado == ADM_RECUSADA ? C_ERRO : r->resultado == ADM_SEM_GARANTIA ? C_AVISO : C_TEXTO, false,
+                "t=%d %s%s: %s (%s)", r->tick, k->id, ativ, admissao_nome(r->resultado), r->motivo);
+        L->v[L->n - 1].amostra = k->cor;
+    }
 }
 
 /* Painel direito com uma tarefa escolhida: o TCB (comando `t` do terminal). */
@@ -1624,21 +1729,25 @@ static void linhas_tarefa(const Sessao *z, int i, Linhas *L) {
     L->v[L->n - 1].amostra = k->cor;
     lin_add(L, C_TEXTO, false, "Parâmetros: cor %06X | ingresso %d | duração %d | período %d | prazo %d", k->cor,
             k->ingresso, k->duracao, k->periodo, k->prazo);
+    linhas_tipo(z, i, L);
     lin_add(L, C_TEXTO, false, "Estado: %s", estado_descricao(k));
-    if (k->restante > 0) lin_add(L, C_TEXTO, false, "Prioridade (menor = mais prioritária): nominal %d, ativa %d", k->prio_nominal, k->prio_ativa);
-    lin_add(L, C_TEXTO, false, "Ativações: %d chegaram, %d concluídas (de %d)", k->liberadas, k->concluidas, MAX_ATIVACOES);
+    if ((k->restante > 0 && !tcb_eh_atendida(k)) || (tcb_eh_servidor(k) && (k->estado == T_PRONTA || k->estado == T_EXECUTANDO)))
+        lin_add(L, C_TEXTO, false, "Prioridade (menor = mais prioritária): nominal %d, ativa %d", k->prio_nominal, k->prio_ativa);
+    if (!tcb_eh_servidor(k)) lin_add(L, C_TEXTO, false, "Ativações: %d chegaram, %d concluídas (de %d)", k->liberadas, k->concluidas, tcb_total_ativacoes(k));
     if (k->restante > 0) {
-        bool perdeu = k->perdas & (1u << k->concluidas);
-        lin_add(L, perdeu ? C_ERRO : C_TEXTO, perdeu, "Ativação atual: nº %d, chegou em %d, deadline em %d, faltam %d tick(s)%s",
-                k->concluidas + 1, k->chegada_atual, k->deadline_abs, k->restante, perdeu ? " - PRAZO PERDIDO" : "");
+        bool perdeu = ativacao_atual_perdeu_prazo(k);
+        char dl[32] = "sem prazo";
+        if (k->prazo > 0) snprintf(dl, sizeof dl, "deadline em %d", k->deadline_abs);
+        lin_add(L, perdeu ? C_ERRO : C_TEXTO, perdeu, "Ativação atual: nº %d, chegou em %d, %s, faltam %d tick(s)%s",
+                k->concluidas + 1, k->chegada_atual, dl, k->restante, perdeu ? " - PRAZO PERDIDO" : "");
         if (k->liberadas - k->concluidas > 1) lin_add(L, C_TEXTO, false, "Ativações acumuladas esperando: %d", k->liberadas - k->concluidas - 1);
     }
-    if (k->liberadas < MAX_ATIVACOES && k->estado != T_TERMINADA) lin_add(L, C_TEXTO, false, "Próxima chegada: instante %d", k->proxima_chegada);
+    if (!tcb_eh_servidor(k) && k->liberadas < tcb_total_ativacoes(k) && k->estado != T_TERMINADA) lin_add(L, C_TEXTO, false, "Próxima chegada: instante %d", k->proxima_chegada);
     if (k->cpu >= 0) lin_add(L, C_TEXTO, false, "CPU no último tick: CPU%d (quantum usado %d/%d)", k->cpu, k->quantum_usado, z->s.atual.quantum);
     else lin_add(L, C_TEXTO, false, "CPU no último tick: nenhuma");
     lin_add(L, C_TEXTO, false, "Executou %d, esperou %d, suspensa %d tick(s); %d preempção(ões), %d sorteio(s), %d prazo(s) perdido(s)",
             k->ticks_exec, k->ticks_espera, k->ticks_suspensa, k->preempcoes, k->sorteios, k->deadlines_perdidos);
-    if (k->neventos) {
+    if (k->neventos && !tcb_eh_atendida(k)) {
         char evs[200] = "";
         for (int j = 0; j < k->neventos; j++) {
             if (strlen(evs) + strlen(k->eventos[j]) + 4 >= sizeof evs) break;
@@ -1656,24 +1765,58 @@ static void linhas_sistema(const Sessao *z, Linhas *L) {
     const Escalonador *esc = sched_obter(e->alg);
     lin_add(L, C_TEXTO, true, "Sistema no instante %d: %s", e->t,
             e->fim ? "simulação concluída" : sim_bloqueado(e) ? "bloqueada (todas as restantes suspensas)" : "em andamento");
-    lin_add(L, C_TEXTO, false, "Algoritmo %s | quantum %d | %d CPU(s)", esc->nome, e->quantum, e->ncpus);
-    linhas_utilizacao(L, e->n, sim_utilizacao(e), e->alg);
-    lin_add(L, C_FRACO, true, "  %6s  %-27s %6s %8s %8s %4s %6s", "id", "estado", "ativ.", "restante", "deadline", "CPU", "prazos");
+    lin_add(L, C_TEXTO, false, "Algoritmo %s | quantum %d | %d CPU(s) | teste de admissão %s", esc->nome, e->quantum, e->ncpus,
+            e->admissao ? "ligado" : "desligado");
+    int nu;
+    double u = sim_utilizacao(e, &nu);
+    linhas_utilizacao(L, nu, u, e->alg);
+    lin_add(L, C_FRACO, true, "  %6s  %-5s %-34s %6s %8s %8s %4s %6s", "id", "tipo", "estado", "ativ.", "restante", "deadline", "CPU",
+            "prazos");
     int *ordem = gantt_ordem(e);
     for (int r = e->n - 1; r >= 0; r--) {
         const TCB *k = &e->tarefas[ordem[r]];
         char rest[16] = "-", dl[16] = "-", cpu[16] = "-";
-        if (k->restante > 0) {
-            snprintf(rest, sizeof rest, "%d", k->restante);
-            snprintf(dl, sizeof dl, "%d", k->deadline_abs);
-        }
-        if (k->cpu >= 0) snprintf(cpu, sizeof cpu, "%d", k->cpu);
-        lin_add(L, k->deadlines_perdidos ? C_ERRO : C_TEXTO, false, "%*s%s  %-27s %3d/%-2d %8s %8s %4s %6d", folga(k->id, 6), "", k->id,
-                estado_descricao(k), k->concluidas, MAX_ATIVACOES, rest, dl, cpu, k->deadlines_perdidos);
+        /* "restante" do servidor é a capacidade que ainda tem */
+        if (tcb_eh_servidor(k) && k->servidor != SERV_BS) snprintf(rest, sizeof rest, "cap %d", k->capacidade);
+        if (k->restante > 0) snprintf(rest, sizeof rest, "%d", k->restante);
+        if (k->restante > 0 && k->prazo > 0) snprintf(dl, sizeof dl, "%d", k->deadline_abs);
+        if (k->cpu >= 0 && k->estado == T_EXECUTANDO) snprintf(cpu, sizeof cpu, "%d", k->cpu);
+        char ativ[32];
+        tcb_ativacoes_txt(k, ativ, sizeof ativ);
+        const char *est = estado_descricao(k);
+        lin_add(L, k->deadlines_perdidos || k->recusada ? C_ERRO : C_TEXTO, false, "%*s%s  %-5s %s%*s %6s %8s %8s %4s %6d",
+                folga(k->id, 6), "", k->id, tipo_curto(k), est, folga(est, 34), "", ativ, rest, dl, cpu, k->deadlines_perdidos);
         L->v[L->n - 1].amostra = k->cor;
     }
     free(ordem);
+    /* fila de aperiódicas, na ordem de atendimento, e quem está com cada servidor */
+    bool tem = false;
+    for (int i = 0; i < e->n; i++)
+        if (tcb_eh_servidor(&e->tarefas[i]) || tcb_eh_atendida(&e->tarefas[i])) tem = true;
+    if (tem) {
+        int *fila = xmalloc((size_t)(e->n ? e->n : 1) * sizeof *fila);
+        int nf = sim_fila_aperiodicas(e, fila);
+        char txt[400] = "";
+        for (int j = 0; j < nf; j++) {
+            char item[ID_MAX + 40];
+            snprintf(item, sizeof item, " %s (%s, chegou em %d)", e->tarefas[fila[j]].id, tipo_curto(&e->tarefas[fila[j]]),
+                     e->tarefas[fila[j]].chegada_atual);
+            if (strlen(txt) + strlen(item) < sizeof txt) strcat(txt, item);
+        }
+        free(fila);
+        lin_add(L, C_TEXTO, false, "Fila de aperiódicas:%s", nf ? txt : " vazia");
+        txt[0] = '\0';
+        for (int i = 0; i < e->n; i++) {
+            const TCB *k = &e->tarefas[i];
+            if (!tcb_eh_servidor(k) || k->atendendo < 0) continue;
+            char item[2 * ID_MAX + 8];
+            snprintf(item, sizeof item, "%s %s -> %s", *txt ? "," : "", k->id, e->tarefas[k->atendendo].id);
+            if (strlen(txt) + strlen(item) < sizeof txt) strcat(txt, item);
+        }
+        if (*txt) lin_add(L, C_TEXTO, false, "Com servidor:%s", txt);
+    }
     lin_add(L, C_FRACO, false, "Clique numa tarefa no gráfico para ver o TCB dela.");
+    linhas_admissao(&z->s, L);
 }
 
 /* Estatísticas finais (como no terminal ao sair). */
@@ -1688,9 +1831,11 @@ static void linhas_estatisticas(const Simulador *s, Linhas *L) {
         perdidos += k->deadlines_perdidos;
         char term[16] = "-";
         if (k->termino >= 0) snprintf(term, sizeof term, "%d", k->termino);
-        lin_add(L, C_TEXTO, false, "%*s%s %4d/%-2d %7d %7d %7d %8.1f %8d %6d %7d %7s", folga(k->id, 6), "", k->id, k->concluidas, MAX_ATIVACOES,
+        char ativ[32];
+        tcb_ativacoes_txt(k, ativ, sizeof ativ);
+        lin_add(L, C_TEXTO, false, "%*s%s %7s %7d %7d %7d %8.1f %8d %6d %7d %7s", folga(k->id, 6), "", k->id, ativ,
                 k->deadlines_perdidos, k->ticks_exec, k->ticks_espera,
-                k->concluidas ? (double)k->resposta_soma / k->concluidas : 0.0, k->resposta_max, k->preempcoes,
+                k->concluidas > k->recusas ? (double)k->resposta_soma / (k->concluidas - k->recusas) : 0.0, k->resposta_max, k->preempcoes,
                 k->sorteios, term);
         L->v[L->n - 1].amostra = k->cor;
     }
@@ -1714,6 +1859,7 @@ static void linhas_estatisticas(const Simulador *s, Linhas *L) {
     if (perdidos) lin_add(L, C_ERRO, true, "Total de prazos perdidos: %d", perdidos);
     else lin_add(L, C_OK, true, "Nenhum prazo perdido.");
     lin_add(L, C_FRACO, false, "(resp. = tempo de resposta: instante em que a ativação terminou - instante em que chegou)");
+    linhas_admissao(s, L);
 }
 
 static void ajuda(bool completo) {
@@ -1741,6 +1887,10 @@ static void ajuda(bool completo) {
     lin_add(&L, C_TEXTO, false, "preto pontilhado = suspensa | seta para baixo = chegada | triângulo = fim de ativação");
     lin_add(&L, C_TEXTO, false, "quadrado preto = término (10ª ativação) | X vermelho = perda de prazo | círculo \"?\" = sorteio");
     lin_add(&L, C_TEXTO, false, "Linhas CPUn: quem ocupou cada processador; listrado = CPU desligada | linha azul = instante atual");
+    lin_add(&L, C_TEXTO, false, "Servidor executando: listras e borda grossa | aperiódica executando: borda tracejada grossa");
+    lin_add(&L, C_TEXTO, false, "Na linha da CPU, \"PS1:A1\" = o servidor PS1 executando a aperiódica A1");
+    lin_add(&L, C_TEXTO, false, "Círculo vermelho cortado = recusada no teste de admissão | círculo com + = recarga (SS) |");
+    lin_add(&L, C_TEXTO, false, "  círculo com - = capacidade descartada (PS)");
     janela_texto("Ajuda", &L);
     lin_liberar(&L);
 }
@@ -1749,6 +1899,14 @@ static void ajuda(bool completo) {
  * mais Suspender/Retomar e Encerrar. As regras são as do terminal
  * (editar_tarefa em ui.c), via sim.c (seção edicao.c). */
 typedef struct { const TCB *k; int t; int v[6]; unsigned cor; } CtxEdicao;
+
+/* Capacidade que o servidor tem agora: de 0 até a dele. */
+static const char *valida_capacidade(int v, int max) {
+    static char buf[64];
+    if (v >= 0 && v <= max) return NULL;
+    snprintf(buf, sizeof buf, "a capacidade deve estar entre 0 e %d (a do servidor)", max);
+    return buf;
+}
 
 enum { E_COR, E_DURACAO, E_PERIODO, E_PRAZO, E_INGRESSO, E_RESTANTE, E_N };
 enum { E_SUSPENDER = 50001, E_ENCERRAR };
@@ -1766,8 +1924,10 @@ static const char *val_edicao(Campo *c, int n, void *ctx, int *ce) {
         if (c[i].bloqueado) continue;
         const char *m = campo_int(&c[i], &k->v[i]);
         if (!m) {
-            if (i == E_PERIODO) m = valida_periodo(k->v[i]);
+            if (i == E_PERIODO) m = valida_periodo_edicao(k->k, k->v[i]);
+            else if (i == E_PRAZO) m = valida_prazo_tarefa(k->v[i], k->k->tipo);
             else if (i == E_INGRESSO) m = valida_ingresso(k->v[i], k->t);
+            else if (i == E_RESTANTE && tcb_eh_servidor(k->k)) m = valida_capacidade(k->v[i], k->k->duracao);
             else m = valida_positivo(k->v[i]);
             m = com_rotulo(&c[i], m);
         }
@@ -1784,25 +1944,35 @@ static void editar_na_simulacao(Sessao *z, int i) {
     TCB *k = &s->atual.tarefas[i];
     int t = s->atual.t;
     bool terminou = k->estado == T_TERMINADA;
+    bool servidor = tcb_eh_servidor(k);
+    /* No servidor, a duração é a capacidade, e "ticks restantes" vira a
+     * capacidade que ele tem agora (o BS não tem capacidade). */
     Campo c[E_N] = {
-        {"cor (RGB hex)", "", false}, {"duração", "", terminou}, {"período", "", terminou},
-        {"prazo", "", terminou}, {"ingresso", "", terminou || k->liberadas > 0},
-        {"ticks restantes", "", terminou || k->restante <= 0},
+        {"cor (RGB hex)", "", false}, {servidor ? "capacidade (duração)" : "duração", "", terminou},
+        {"período", "", terminou}, {k->tipo == TIPO_APERIODICA ? "prazo (0 = sem prazo)" : "prazo", "", terminou},
+        {"ingresso", "", terminou || k->liberadas > 0},
+        {servidor ? "capacidade que tem agora" : "ticks restantes", "", terminou || (servidor ? k->servidor == SERV_BS : k->restante <= 0)},
     };
     snprintf(c[E_COR].valor, sizeof c[0].valor, "%06X", k->cor);
     snprintf(c[E_DURACAO].valor, sizeof c[0].valor, "%d", k->duracao);
     snprintf(c[E_PERIODO].valor, sizeof c[0].valor, "%d", k->periodo);
     snprintf(c[E_PRAZO].valor, sizeof c[0].valor, "%d", k->prazo);
     snprintf(c[E_INGRESSO].valor, sizeof c[0].valor, "%d", k->ingresso < t && k->liberadas == 0 ? t : k->ingresso);
-    if (k->restante > 0) snprintf(c[E_RESTANTE].valor, sizeof c[0].valor, "%d", k->restante);
+    if (servidor && k->servidor != SERV_BS) snprintf(c[E_RESTANTE].valor, sizeof c[0].valor, "%d", k->capacidade);
+    else if (k->restante > 0) snprintf(c[E_RESTANTE].valor, sizeof c[0].valor, "%d", k->restante);
     else snprintf(c[E_RESTANTE].valor, sizeof c[0].valor, "-");
 
     Linhas intro = {0};
-    lin_add(&intro, C_TEXTO, false, "Estado: %s | ativações %d/%d", estado_descricao(k), k->concluidas, MAX_ATIVACOES);
+    char ativ[32];
+    tcb_ativacoes_txt(k, ativ, sizeof ativ);
+    lin_add(&intro, C_TEXTO, false, "Tipo: %s | estado: %s | ativações %s", tipo_nome(k), estado_descricao(k), ativ);
     lin_add(&intro, C_FRACO, false, "A mudança vale a partir do instante %d. A duração nova vale a partir da próxima", t);
     lin_add(&intro, C_FRACO, false, "ativação (\"ticks restantes\" muda a atual).");
-    if (terminou) lin_add(&intro, C_AVISO, false, "A tarefa já terminou as %d ativações: só a cor pode mudar.", MAX_ATIVACOES);
-    else if (k->liberadas > 0) lin_add(&intro, C_FRACO, false, "O ingresso não muda mais: a tarefa já chegou no instante %d.", k->chegadas[0]);
+    if (terminou && k->recusada) lin_add(&intro, C_AVISO, false, "A tarefa foi recusada pelo teste de admissão: só a cor pode mudar.");
+    else if (terminou && servidor) lin_add(&intro, C_AVISO, false, "O servidor já terminou: só a cor pode mudar.");
+    else if (terminou) lin_add(&intro, C_AVISO, false, "A tarefa já terminou as %d ativações: só a cor pode mudar.", tcb_total_ativacoes(k));
+    else if (k->liberadas > 0) lin_add(&intro, C_FRACO, false, "O ingresso não muda mais: a tarefa já chegou no instante %d.", tcb_chegada(k, 0));
+    if (!terminou) lin_add(&intro, C_FRACO, false, "O período não pode mudar o tipo da tarefa (o sinal dele) durante a simulação.");
 
     BotaoExtra ex[2] = {{suspensa_pelo_usuario(k) ? "Retomar" : "Suspender", E_SUSPENDER, B_NORMAL},
                         {"Encerrar agora", E_ENCERRAR, B_PERIGO}};
@@ -1837,7 +2007,7 @@ static void editar_na_simulacao(Sessao *z, int i) {
                       !c[E_PERIODO].bloqueado && ctx.v[E_PERIODO] != k->periodo,
                       !c[E_PRAZO].bloqueado && ctx.v[E_PRAZO] != k->prazo,
                       !c[E_INGRESSO].bloqueado && ctx.v[E_INGRESSO] != k->ingresso,
-                      !c[E_RESTANTE].bloqueado && ctx.v[E_RESTANTE] != k->restante};
+                      !c[E_RESTANTE].bloqueado && ctx.v[E_RESTANTE] != (servidor ? k->capacidade : k->restante)};
     bool alguma = false;
     for (int j = 0; j < E_N; j++) alguma |= muda[j];
     if (!alguma) {
@@ -1849,15 +2019,36 @@ static void editar_na_simulacao(Sessao *z, int i) {
     size_t n = 0;
 #define FEITO(...) n += (size_t)snprintf(feito + n, n < sizeof feito ? sizeof feito - n : 0, __VA_ARGS__)
     if (muda[E_COR]) { k->cor = ctx.cor; FEITO(" cor %06X;", ctx.cor); }
-    if (muda[E_DURACAO]) { k->duracao = ctx.v[E_DURACAO]; FEITO(" duração %d (a partir da próxima ativação);", k->duracao); }
-    if (muda[E_PERIODO]) { edicao_periodo(k, ctx.v[E_PERIODO]); FEITO(" período %d, próxima chegada no instante %d%s;", k->periodo, k->proxima_chegada, k->proxima_chegada < t ? " (já passou: chega no próximo tick)" : ""); }
+    if (muda[E_DURACAO]) {
+        k->duracao = ctx.v[E_DURACAO];
+        if (servidor) FEITO(" capacidade %d (a partir da próxima recarga);", k->duracao);
+        else FEITO(" duração %d (a partir da próxima ativação);", k->duracao);
+    }
+    if (muda[E_PERIODO]) {
+        edicao_periodo(k, ctx.v[E_PERIODO]);
+        if (k->tipo == TIPO_PERIODICA || (servidor && (k->servidor == SERV_PS || k->servidor == SERV_DS)))
+            FEITO(" período %d, próxima chegada no instante %d%s;", k->periodo, k->proxima_chegada,
+                  k->proxima_chegada < t ? " (já passou: chega no próximo tick)" : "");
+        else
+            FEITO(" período %d;", k->periodo);
+    }
     if (muda[E_PRAZO]) { edicao_prazo(k, ctx.v[E_PRAZO]); FEITO(" prazo %d%s;", k->prazo, k->restante > 0 ? " (deadline da ativação atual recalculado)" : ""); }
     if (muda[E_INGRESSO]) { edicao_ingresso(k, ctx.v[E_INGRESSO]); FEITO(" ingresso %d;", k->ingresso); }
-    if (muda[E_RESTANTE]) { k->restante = ctx.v[E_RESTANTE]; FEITO(" ativação atual precisa de %d tick(s);", k->restante); }
+    if (muda[E_RESTANTE] && servidor) { k->capacidade = ctx.v[E_RESTANTE]; FEITO(" capacidade agora %d;", k->capacidade); }
+    else if (muda[E_RESTANTE]) { k->restante = ctx.v[E_RESTANTE]; FEITO(" ativação atual precisa de %d tick(s);", k->restante); }
 #undef FEITO
     sim_concluir_edicao(s);
     if (n && n < sizeof feito) feito[n - 1] = '.';
     fmsg(z->msg, sizeof z->msg, "Tarefa %s alterada no instante %d:%s", k->id, t, feito);
+    /* O teste de admissão não bloqueia a edição, mas avisa o que diria agora. */
+    if ((muda[E_DURACAO] || muda[E_PERIODO] || muda[E_PRAZO]) && k->admitida && k->estado != T_TERMINADA && s->atual.admissao) {
+        Admissao a = admissao_tarefa(&s->atual, i);
+        if (a.resultado != ADM_ACEITA) {
+            size_t l = strlen(z->msg);
+            snprintf(z->msg + l, sizeof z->msg - l, " Aviso: com os valores novos, o teste de admissão daria \"%s\" (%s).",
+                     admissao_nome(a.resultado), a.motivo);
+        }
+    }
     z->exportado = false;
 }
 
@@ -1937,7 +2128,7 @@ static bool acao_simulacao(Sessao *z, int a) {
         const char **ids = xmalloc((size_t)(e->n + 1) * sizeof *ids);
         for (int i = 0; i < e->n; i++) ids[i] = e->tarefas[i].id;
         TarefaCfg t = {"", config_cor_padrao(e->n), e->t, PADRAO_DURACAO, PADRAO_PERIODO,
-                       PADRAO_PERIODO, NULL, 0, NULL, 0};
+                       PADRAO_PERIODO, NULL, 0, NULL, 0, TIPO_PERIODICA, SERV_BS, NULL, 0};
         id_sugerir(ids, e->n, t.id, sizeof t.id);
         char ev[512];
         bool ok = form_tarefa("Nova tarefa durante a simulação", &t, ids, e->n, -1, e->t, ev, sizeof ev);
@@ -1950,7 +2141,13 @@ static bool acao_simulacao(Sessao *z, int a) {
         sim_adicionar_tarefa(s, &z->extras.tarefas[z->extras.n - 1]);
         sim_concluir_edicao(s);
         z->exportado = false;
-        fmsg(z->msg, sizeof z->msg, "Tarefa %s adicionada; chega no instante %d.", t.id, t.ingresso);
+        fmsg(z->msg, sizeof z->msg, "Tarefa %s adicionada (%s); é criada no instante %d e passa pelo teste de admissão lá.",
+             t.id, tipo_nome(&e->tarefas[e->n - 1]), t.ingresso);
+        if (e->admissao) {
+            Admissao a = admissao_tarefa(e, e->n - 1);
+            size_t l = strlen(z->msg);
+            snprintf(z->msg + l, sizeof z->msg - l, " Se entrasse agora: %s (%s).", admissao_nome(a.resultado), a.motivo);
+        }
         break;
     }
     case S_ALG: {
@@ -2172,7 +2369,7 @@ static void tela_simulacao(const Config *cfg, const OpcoesUI *op, bool completo)
     z->tick_insp = -1;
     config_padrao(&z->extras);
     ui_caminho_svg(cfg, op, z->caminho_svg, sizeof z->caminho_svg);
-    sim_iniciar(&z->s, cfg, !completo, op->semente);
+    sim_iniciar(&z->s, cfg, !completo, op->semente, op->admissao);
     if (completo) {
         /* Simula tudo de uma vez, sem histórico, e já gera o SVG (req. 2.4). */
         const char *motivo = sim_rodar_ate_fim(&z->s);

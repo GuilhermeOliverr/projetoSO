@@ -1,0 +1,9 @@
+# Projeto B: aperiódicas com prazo passam pelo teste a cada ativação.
+# O PS1 (1 a cada 10) pode ficar até 2(10-1) = 18 ticks sem entregar nada:
+# A1 (3 ticks em 5) não cabe e é recusada, e A2 (3 ticks em 40) cabe
+# (garantido(40) = 3).
+RM;2;1
+1;E74C3C;0;2;10;10
+PS1;95A5A6;0;1;10;10
+A1;F39C12;0;3;0;5
+A2;2ECC71;0;3;0;40

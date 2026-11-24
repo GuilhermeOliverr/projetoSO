@@ -56,7 +56,10 @@
  *  - o id é texto (até 31 bytes, ver id_validar); ids que são inteiros
  *    continuam valendo pelo número ("01" é o mesmo id que "1");
  *  - campo vazio recebe o valor padrão, com aviso (req. 3.2);
- *  - tarefas aperiódicas (periodo = 0) são ignoradas com aviso (req. 4.4).
+ *  - o período diz o tipo da tarefa: > 0 periódica, 0 aperiódica e < 0
+ *    esporádica (req. B 1.2 e 1.3); o id BSxx, PSxx, DSxx ou SSxx indica um
+ *    servidor (req. B 2). Se cada tarefa entra no sistema quem decide é o
+ *    teste de admissão, durante a simulação (admissao.c).
  *
  * Fluxo de config_carregar (lá no fim do arquivo):
  *   ler_arquivo -> para cada linha: ler_linha_sistema (1ª linha útil) ou
@@ -163,18 +166,24 @@ void config_adicionar(Config *cfg, const TarefaCfg *t) {
     novo->eventos = NULL;
     novo->lista_ev = NULL;
     novo->nev = 0;
-    config_definir_eventos(novo, t->eventos ? t->eventos : "");    // Copia e separa os eventos da tarefa de forma independente usando config_definir_eventos()
+    novo->ocorr = NULL;
+    novo->nocorr = 0;
+    config_classificar(novo);   /* o tipo sempre sai do id e do período, venha a tarefa do arquivo ou da interface */
+    config_definir_eventos(novo, t->eventos ? t->eventos : "");    // Copia e separa os eventos (e as ocorrências) da tarefa de forma independente usando config_definir_eventos()
     cfg->n++;
 }
 
-//Libera a memória dinâmica alocada para uma tarefa específica (string de eventos e vetor de itens).
+//Libera a memória dinâmica alocada para uma tarefa específica (string de eventos, vetor de itens e ocorrências).
 void config_liberar_tarefa(TarefaCfg *t) {
     for (int i = 0; i < t->nev; i++) free(t->lista_ev[i]);
     free(t->lista_ev);
     free(t->eventos);
+    free(t->ocorr);
     t->lista_ev = NULL;
     t->eventos = NULL;
     t->nev = 0;
+    t->ocorr = NULL;
+    t->nocorr = 0;
 }
 
 //Pega a string de eventos da tarefa e a separa por vírgulas ou pontos e vírgulas, armazenando cada evento individualmente no vetor dinâmico `lista_ev`.
@@ -202,6 +211,104 @@ void config_definir_eventos(TarefaCfg *t, const char *texto) {
         p = sep ? sep + 1 : NULL;
     }
     free(copia);
+    /* Numa aperiódica ou esporádica a lista é o que diz quando ela chega
+     * (req. B 1.3). Quem chama já validou o texto (config_ocorrencias); se
+     * mesmo assim não servir, fica a ocorrência única no ingresso, para o
+     * TCB nunca apontar para uma lista vazia. */
+    if (t->tipo == TIPO_APERIODICA || t->tipo == TIPO_ESPORADICA) {
+        if (config_ocorrencias(raw, t->tipo, t->periodo, t->ingresso, &t->ocorr, &t->nocorr)) {
+            t->ocorr = xcalloc(1, sizeof *t->ocorr);
+            t->nocorr = 1;
+        }
+    }
+}
+
+/* Servidor = BS, PS, DS ou SS seguido de um número (req. B 2: "BSxx", onde
+ * xx diferencia os servidores do mesmo tipo). Sem diferenciar maiúsculas, como o resto do
+ * arquivo: "bs1" também é servidor. "BS" sozinho ou "BSA" não são: o id
+ * fica sendo o de uma tarefa comum. */
+bool config_id_servidor(const char *id, TipoServidor *tipo) {
+    static const struct { const char *prefixo; TipoServidor tipo; } servidores[] = {
+        {"BS", SERV_BS},
+        {"PS", SERV_PS},
+        {"DS", SERV_DS},
+        {"SS", SERV_SS},
+    };
+    for (size_t i = 0; i < sizeof servidores / sizeof servidores[0]; i++) {
+        const char *p = servidores[i].prefixo;
+        if (toupper((unsigned char)id[0]) != p[0] || toupper((unsigned char)id[1]) != p[1]) continue;
+        const char *num = id + 2;
+        if (!*num) return false;
+        for (const char *q = num; *q; q++)
+            if (!isdigit((unsigned char)*q)) return false;
+        if (tipo) *tipo = servidores[i].tipo;
+        return true;
+    }
+    return false;
+}
+
+/* O id decide se é servidor; o sinal do período decide o resto: 0 é
+ * aperiódica (req. B 1.2) e negativo é esporádica (req. B 1.3). */
+void config_classificar(TarefaCfg *t) {
+    t->servidor = SERV_BS;
+    if (config_id_servidor(t->id, &t->servidor)) t->tipo = TIPO_SERVIDOR;
+    else if (t->periodo == 0) t->tipo = TIPO_APERIODICA;
+    else if (t->periodo < 0) t->tipo = TIPO_ESPORADICA;
+    else t->tipo = TIPO_PERIODICA;
+}
+
+/* Os instantes vêm separados por ',' (ou ';', como os eventos em geral), e
+ * são relativos ao ingresso: numa tarefa criada no tempo 10, o 0 chega em 10
+ * e o 5 chega em 15 (req. B 1.3). A esporádica tem de respeitar o intervalo
+ * mínimo |periodo| entre duas ocorrências seguidas; na aperiódica só a ordem
+ * é exigida (duas podem chegar juntas). O motivo fica num buffer estático,
+ * como nos outros validadores. */
+const char *config_ocorrencias(const char *eventos, TipoTarefa tipo, int periodo, int ingresso, int **out, int *n) {
+    static char buf[200];
+    int *v = NULL, nv = 0, cap = 0;
+    const char *motivo = NULL;
+    char *copia = xstrdup(eventos ? eventos : "");
+    for (char *p = copia; p && !motivo;) {
+        char *sep = strpbrk(p, ",;");
+        if (sep) *sep = '\0';
+        char *item = str_trim(p);
+        p = sep ? sep + 1 : NULL;
+        if (!*item) continue;
+        int x;
+        if (parse_int(item, &x) != 0 || x < 0) {
+            snprintf(buf, sizeof buf, "o instante '%.40s' não é um número inteiro >= 0", item);
+            motivo = buf;
+        } else if (x > INT_MAX - (ingresso > 0 ? ingresso : 0)) {
+            snprintf(buf, sizeof buf, "o instante %d somado ao ingresso (%d) é grande demais", x, ingresso);
+            motivo = buf;
+        } else if (nv > 0 && x < v[nv - 1]) {
+            snprintf(buf, sizeof buf, "os instantes precisam estar em ordem crescente (%d vem depois de %d)", x, v[nv - 1]);
+            motivo = buf;
+        } else if (nv > 0 && tipo == TIPO_ESPORADICA && x - v[nv - 1] < -periodo) {
+            snprintf(buf, sizeof buf, "as ocorrências %d e %d estão a %d tick(s) uma da outra, menos que o "
+                     "intervalo mínimo da esporádica (|periodo| = %d)", v[nv - 1], x, x - v[nv - 1], -periodo);
+            motivo = buf;
+        } else {
+            if (nv == cap) {
+                cap = cap ? cap * 2 : 8;
+                v = xrealloc(v, (size_t)cap * sizeof *v);
+            }
+            v[nv++] = x;
+        }
+    }
+    free(copia);
+    if (!motivo && nv == 0) {   /* sem lista: uma ocorrência, no próprio ingresso */
+        v = xrealloc(v, sizeof *v);
+        v[nv++] = 0;
+    }
+    if (motivo || !out) {
+        free(v);
+        v = NULL;
+        nv = 0;
+    }
+    if (out) *out = v;
+    if (n) *n = nv;
+    return motivo;
 }
 
 /* =========================================================================
@@ -514,26 +621,36 @@ static void ler_linha_tarefa(Ctx *c, char *s, IdsVistos *vistos) {
         }
     } else ok = false;
 
-    // 5. Validação do período (>= 0; 0 indica aperiódica)
-    if (campo_int(c, "periodo", f[4], &t.periodo, false, 0)) {
-        if (t.periodo < 0) {
-            erro_campo(c, "periodo", t.periodo, "valor negativo não é permitido "
-                       "(use > 0 para tarefa periódica ou 0 para aperiódica)");
-            ok = false;
-        }
-    } else ok = false;
+    // 5. Validação do período: > 0 periódica, 0 aperiódica (req. B 1.2), < 0 esporádica (req. B 1.3).
+    //    O tipo sai daqui e do id (config_classificar); um servidor é periódico, então precisa de período > 0.
+    bool periodo_ok = campo_int(c, "periodo", f[4], &t.periodo, false, 0);
+    if (!periodo_ok) ok = false;
+    config_classificar(&t);
+    if (periodo_ok && t.periodo == INT_MIN) {   /* |periodo| não caberia num int */
+        msg_add(&cfg->erros, "%s:%d: campo 'periodo' = '%s': número grande demais", c->arq, c->linha, f[4]);
+        ok = false;
+    } else if (periodo_ok && t.tipo == TIPO_SERVIDOR && t.periodo <= 0) {
+        erro_campo(c, "periodo", t.periodo, "um servidor é uma tarefa periódica: o período deve ser maior que zero");
+        ok = false;
+    }
 
-    // 6. Validação do prazo (se omitido, assume prazo = período)
-    if (n < 6) {
-        t.prazo = t.periodo;
-        msg_add(&cfg->avisos, "%s:%d: campo 'prazo' ausente; usando o período (%d) como prazo",
-                c->arq, c->linha, t.periodo);
-    } else if (!*f[5]) {
-        t.prazo = t.periodo;
-        msg_add(&cfg->avisos, "%s:%d: campo 'prazo' vazio; usando o período (%d) como prazo",
-                c->arq, c->linha, t.periodo);
+    // 6. Validação do prazo. Se omitido: o período (periódica e servidor), o intervalo mínimo (esporádica) ou
+    //    nenhum (aperiódica: prazo 0 = sem prazo, ela nunca perde prazo).
+    int prazo_padrao = t.tipo == TIPO_ESPORADICA ? -t.periodo : t.tipo == TIPO_APERIODICA ? 0 : t.periodo;
+    const char *nome_padrao = t.tipo == TIPO_ESPORADICA ? "o intervalo mínimo |periodo|" : "o período";
+    if (n < 6 || !*f[5]) {
+        t.prazo = prazo_padrao;
+        if (t.tipo == TIPO_APERIODICA)
+            msg_add(&cfg->avisos, "%s:%d: campo 'prazo' %s; a aperiódica %s fica sem prazo",
+                    c->arq, c->linha, n < 6 ? "ausente" : "vazio", t.id);
+        else
+            msg_add(&cfg->avisos, "%s:%d: campo 'prazo' %s; usando %s (%d) como prazo",
+                    c->arq, c->linha, n < 6 ? "ausente" : "vazio", nome_padrao, prazo_padrao);
     } else if (campo_int(c, "prazo", f[5], &t.prazo, false, 0)) {
-        if (t.prazo <= 0) {
+        if (t.tipo == TIPO_APERIODICA && t.prazo < 0) {
+            erro_campo(c, "prazo", t.prazo, "o prazo não pode ser negativo (0 = aperiódica sem prazo)");
+            ok = false;
+        } else if (t.tipo != TIPO_APERIODICA && t.prazo <= 0) {
             erro_campo(c, "prazo", t.prazo, "o prazo deve ser maior que zero");
             ok = false;
         }
@@ -543,14 +660,21 @@ static void ler_linha_tarefa(Ctx *c, char *s, IdsVistos *vistos) {
 
     if (!ok) return;   /* algum campo inválido: a tarefa não entra */
 
-    // Descarte de tarefas aperiódicas
-    if (t.periodo == 0) {
-        msg_add(&cfg->avisos, "%s:%d: tarefa %s é aperiódica (periodo = 0) e foi ignorada: "
-                "o Projeto A só simula tarefas periódicas", c->arq, c->linha, t.id);
-        return;
+    // 7. Ocorrências da aperiódica/esporádica (lista_eventos), com o intervalo mínimo da esporádica (req. B 1.3)
+    if (t.tipo == TIPO_APERIODICA || t.tipo == TIPO_ESPORADICA) {
+        const char *m = config_ocorrencias(t.eventos, t.tipo, t.periodo, t.ingresso, NULL, NULL);
+        if (m) {
+            msg_add(&cfg->erros, "%s:%d: campo 'lista_eventos' da %s %s: %s", c->arq, c->linha,
+                    t.tipo == TIPO_ESPORADICA ? "esporádica" : "aperiódica", t.id, m);
+            return;
+        }
     }
+    if (t.tipo == TIPO_SERVIDOR && t.servidor == SERV_BS)
+        msg_add(&cfg->avisos, "%s:%d: o servidor %s é um Background Server: executa as aperiódicas só quando "
+                "uma CPU ficaria desligada, sem limite de capacidade (a duração e o período não o limitam)",
+                c->arq, c->linha, t.id);
     /* Avisos que não impedem a simulação, mas ajudam o usuário. */
-    if (t.prazo < t.duracao)
+    if (t.prazo > 0 && t.prazo < t.duracao)
         msg_add(&cfg->avisos, "%s:%d: tarefa %s tem prazo (%d) menor que a duração (%d): "
                 "vai perder o prazo em toda ativação", c->arq, c->linha, t.id, t.prazo, t.duracao);
     for (int i = 0; i < cfg->n; i++)
@@ -559,11 +683,11 @@ static void ler_linha_tarefa(Ctx *c, char *s, IdsVistos *vistos) {
                     "no Gantt elas ficarão iguais", c->arq, c->linha, t.id, t.cor,
                     cfg->tarefas[i].id);
     config_adicionar(cfg, &t);
-    
-     /* a simulação; o aviso mostra que o campo foi lido (e não ignorado por
-     * engano). */
+
+    /* Numa periódica (ou num servidor) a lista_eventos não muda a simulação;
+     * o aviso mostra que o campo foi lido (e não ignorado por engano). */
     const TarefaCfg *nova = &cfg->tarefas[cfg->n - 1];
-    if (nova->nev > 0)
+    if (nova->nev > 0 && (nova->tipo == TIPO_PERIODICA || nova->tipo == TIPO_SERVIDOR))
         msg_add(&cfg->avisos, "%s:%d: tarefa %s tem %d evento(s) em lista_eventos (%.60s%s): "
                 "lidos e guardados", c->arq, c->linha, t.id, nova->nev, nova->eventos,
                 strlen(nova->eventos) > 60 ? "..." : "");
@@ -684,8 +808,8 @@ bool config_carregar(const char *caminho, Config *cfg) {
                 "2 linhas (sistema + 1 tarefa no formato id;cor;ingresso;duracao;periodo;prazo)",
                 caminho);
     } else if (cfg->erros.n == 0 && cfg->n == 0) {
-        msg_add(&cfg->avisos, "%s: nenhuma tarefa periódica restou; não há o que simular no "
-                "Projeto A (adicione tarefas na tela de configuração)", caminho);
+        msg_add(&cfg->avisos, "%s: nenhuma tarefa restou; não há o que simular "
+                "(adicione tarefas na tela de configuração)", caminho);
     }
     return cfg->erros.n == 0;
 }
@@ -1066,6 +1190,10 @@ void term_negrito(void) {
 
 void term_fraco(void) {
     if (g_usar_cores) fputs("\x1b[2m", stdout);
+}
+
+void term_sublinhado(void) {
+    if (g_usar_cores) fputs("\x1b[4m", stdout);
 }
 
 void term_limpar(void) {

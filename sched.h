@@ -31,6 +31,39 @@
 /*toda tarefa periódica "termina" após 10 ativações. */
 #define MAX_ATIVACOES 10
 
+/* Tipo da tarefa (Projeto B, req. 1 e 2). Sai do arquivo de configuração:
+ * o sinal do período separa periódica, aperiódica e esporádica, e o prefixo
+ * do id separa os servidores (config_classificar, em config.c). */
+typedef enum {
+    TIPO_PERIODICA,   // período > 0: uma ativação por período, 10 ao todo (req. 4.4 do Projeto A)
+    TIPO_APERIODICA,  // período = 0 (req. B 1.2): chega nos instantes de lista_eventos, ou só no ingresso
+    TIPO_ESPORADICA,  // período < 0 (req. B 1.3): |período| = intervalo mínimo entre duas ocorrências
+    TIPO_SERVIDOR     // id BSxx, PSxx, DSxx ou SSxx (req. B 2): tarefa que executa as aperiódicas e esporádicas
+} TipoTarefa;
+
+/* Qual servidor (req. B 2). Os campos da linha de configuração continuam
+ * com o mesmo sentido: duracao = capacidade, periodo = período do servidor,
+ * prazo = prazo de cada período. */
+typedef enum {
+    SERV_BS,  // Background Server: executa só quando uma CPU ficaria desligada
+    SERV_PS,  // Polling Server: recarrega a capacidade a cada período; se ganha a CPU sem aperiódica na fila, perde a capacidade até o próximo
+    SERV_DS,  // Deferrable Server: recarrega a cada período, mas guarda a capacidade até aparecer uma aperiódica
+    SERV_SS   // Sporadic Server: repõe só o que gastou, um período depois de ficar ativo
+} TipoServidor;
+
+/* Recargas agendadas de um Sporadic Server. Cada vez que ele fica ativo e
+ * depois para, o que gastou nesse trecho volta um período depois do
+ * instante em que ficou ativo. Cada trecho gasta ao menos 1 tick, então há
+ * no máximo `duracao` recargas pendentes; o vetor é fixo para o TCB
+ * continuar copiável com memcpy, e se encher a recarga nova é somada à
+ * última e adiada para o instante dela (atrasar uma recarga nunca deixa o
+ * servidor usar mais que a capacidade). */
+#define MAX_RECARGAS 16
+typedef struct {
+    int instante;     // quando a capacidade volta
+    int quantidade;   // quanto volta
+} RecargaSS;
+
 /* Tamanho do id da tarefa contando o '\0' final: até ID_MAX-1 = 31 bytes.
  *
  * Por que texto: o enunciado (req. 3.3) só diz que o id é "o identificador
@@ -65,7 +98,9 @@ typedef enum {
 typedef enum {
     SUSP_NENHUM,  // Motivo 0: A tarefa não está suspensa no momento
     SUSP_PERIODO,  // Motivo 1: Ativação atual concluída, aguardando o início do próximo período (no Gantt aparece em branco/vazia)
-    SUSP_USUARIO   // Motivo 2: Suspensa manualmente pelo usuário no passo a passo (no Gantt aparece em preto pontilhado)
+    SUSP_USUARIO,  // Motivo 2: Suspensa manualmente pelo usuário no passo a passo (no Gantt aparece em preto pontilhado)
+    SUSP_SEM_TRABALHO,   // Motivo 3: Servidor sem aperiódica para executar (a fila está vazia; no Gantt aparece em branco)
+    SUSP_SEM_CAPACIDADE  // Motivo 4: Servidor com a capacidade esgotada, esperando a recarga (no Gantt aparece em branco)
 } MotivoSuspensao;
 
 // Início da estrutura principal TCB (Task Control Block) que guarda todo o contexto da tarefa
@@ -81,18 +116,29 @@ typedef struct {
     const char *eventos_raw;   // Ponteiro para a string bruta contendo a lista de eventos associada à tarefa
     const char *const *eventos;// Vetor dinâmico de ponteiros para as strings de eventos individuais sem interpretação
     int neventos;              // Quantidade total de eventos armazenados no vetor de eventos
+    TipoTarefa tipo;           // Periódica, aperiódica, esporádica ou servidor (ver TipoTarefa)
+    TipoServidor servidor;     // Qual servidor, quando tipo == TIPO_SERVIDOR
+    const int *ocorrencias;    // Aperiódica/esporádica: instantes de chegada, relativos ao ingresso (dados imutáveis da configuração, como `eventos`)
+    int nocorrencias;          // Quantidade de ocorrências (= total de ativações da aperiódica/esporádica)
 
     /* ---- estado dinâmico ---- */
     EstadoTarefa estado;        // Estado atual de execução da tarefa no ciclo de vida do SO (T_PRONTA, T_EXECUTANDO, etc.)
     MotivoSuspensao motivo;    // Razão da suspensão da tarefa quando estado == T_SUSPENSA (SUSP_PERIODO ou SUSP_USUARIO)
     int liberadas;             // Contador da quantidade de ativações que já foram liberadas/chegaram no sistema
     int concluidas;            // Contador da quantidade de ativações que já foram totalmente concluídas (máximo 10)
-    int chegadas[MAX_ATIVACOES]; // Vetor que registra o instante exato de relógio (tick) de chegada de cada uma das 10 ativações
+    int chegadas[MAX_ATIVACOES]; // Instante de chegada de cada ativação; não leia direto, use tcb_chegada()
     int proxima_chegada;       // Instante do relógio global em que ocorrerá a liberação da próxima ativação //do periodo da tarefa (chegada do próximo job)
     int restante;              // Quantidade de ticks de CPU que ainda faltam ser executados para concluir a ativação atual
     int chegada_atual;         // Instante do relógio em que a ativação atualmente em andamento foi liberada
     int deadline_abs;          // Instante limite absoluto do relógio para o término da ativação atual (chegada_atual + prazo)
-    unsigned perdas;           // Máscara/contador de bits indicando quais ativações estouraram o prazo
+    /* perdas_ate: as ativações pendentes de número MENOR que este já foram
+     * marcadas como "prazo perdido". Basta um número (e não um bit por
+     * ativação) porque as chegadas são crescentes e o prazo relativo é o
+     * mesmo para todas: entre as ativações pendentes, as que já venceram
+     * formam sempre um começo da fila. Antes era uma máscara de 32 bits, que
+     * limitava a 32 ativações; uma tarefa esporádica (Projeto B) pode ter
+     * qualquer número de ocorrências. */
+    int perdas_ate;
     int cpu;                   // Índice do processador em que a tarefa está executando no tick atual (-1 se não estiver na CPU)
     int quantum_usado;         // Quantidade de ticks contínuos que a tarefa já executou no quantum corrente
     /* fila_desde: instante em que a tarefa entrou no FIM da fila de prontas.
@@ -106,6 +152,24 @@ typedef struct {
      * (critério 1 = quem já estava na CPU) continua igual para todos os
      * algoritmos. RM e EDF não leem este campo, então nada muda neles. */
     int fila_desde;
+
+    /* Vínculo entre servidor e aperiódica (req. B 2.2): o servidor que tira
+     * uma aperiódica (ou esporádica) da fila fica com ela até a ativação
+     * acabar ou a capacidade dele esgotar, e nenhum outro servidor a vê.
+     * São índices no vetor de tarefas, e não ponteiros, para o TCB continuar
+     * sendo copiado com memcpy nos snapshots. */
+    int atendendo;             // Servidor: índice da aperiódica/esporádica que ele está executando (-1 = nenhuma)
+    int atendida_por;          // Aperiódica/esporádica: índice do servidor que a tirou da fila (-1 = está na fila)
+    int capacidade;            // Servidor: ticks de CPU que ainda pode usar até a próxima recarga (o BS não tem limite e não usa)
+    int ss_ativo_desde;        // Sporadic Server: instante em que ficou ativo (-1 = ocioso); a recarga é um período depois
+    int ss_consumo;            // Sporadic Server: capacidade gasta desde que ficou ativo (é o que vai voltar)
+    int nrecargas;             // Sporadic Server: quantas recargas estão agendadas em `recargas`
+    RecargaSS recargas[MAX_RECARGAS];   // Sporadic Server: recargas agendadas, em ordem de instante
+
+    /* ---- teste de admissão (req. B 3) ---- */
+    bool admitida;             // Passou pelo teste no ingresso e entrou no sistema
+    bool recusada;             // O teste recusou a tarefa no ingresso: ela fica terminada sem executar (estado T_TERMINADA)
+    int recusas;               // Aperiódica: ativações recusadas pelo teste ao entrar na fila (contam como concluídas, sem executar)
 
     /* ---- prioridade (menor valor = mais prioritária) ----
      * nominal: a que o algoritmo dá à tarefa (RM: período; EDF: deadline
@@ -128,6 +192,18 @@ const char *estado_nome(EstadoTarefa e);    // Retorna uma string com o nome leg
 const char *estado_descricao(const TCB *k);    // Retorna a descrição detalhada do estado incluindo o motivo da suspensão quando aplicável
 
 bool suspensa_pelo_usuario(const TCB *k);    // Retorna true se a tarefa foi suspensa manualmente pelo usuário (SUSP_USUARIO), impedindo que chegue a progredir sozinha
+
+bool ativacao_atual_perdeu_prazo(const TCB *k);    // true se a ativação em andamento (a de número `concluidas`) já foi marcada como prazo perdido
+
+int tcb_total_ativacoes(const TCB *k);    // Quantas ativações a tarefa tem ao todo; quando chega a esse número de concluídas, ela termina
+int tcb_chegada(const TCB *k, int j);     // Instante em que chegou a ativação j (de 0 a liberadas-1)
+
+bool tcb_eh_servidor(const TCB *k);       // true se a tarefa é um servidor (BSxx, PSxx, DSxx ou SSxx)
+bool tcb_eh_atendida(const TCB *k);       // true se é aperiódica ou esporádica: só executa por meio de um servidor (req. B 1.1)
+const char *tipo_nome(const TCB *k);      // Nome do tipo para as telas: "periódica", "aperiódica", "esporádica" ou "servidor BS"
+const char *tipo_nome_de(TipoTarefa tipo, TipoServidor servidor);    // O mesmo, a partir do tipo (para a configuração, antes do TCB existir)
+const char *tipo_curto(const TCB *k);     // Nome curto para as tabelas: "per.", "aper.", "esp." ou o tipo do servidor ("PS"
+void tcb_ativacoes_txt(const TCB *k, char *buf, size_t tam);    // "concluídas/total" para as tabelas; "-" num servidor, que não tem ativações contadas
 
 /* ===========================================================================
  * Seção sched.h (originalmente include/sched.h)
