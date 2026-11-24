@@ -1190,12 +1190,14 @@ double utilizacao_parcela(TipoTarefa tipo, TipoServidor servidor, int duracao, i
 
 /* Utilização do processador: U = soma de C/P (duração / período). Se U > 1
  * numa CPU só, é impossível cumprir todos os prazos. Em `n` (pode ser NULL)
- * vai quantas tarefas entraram na soma, o n do limite do RM. */
+ * vai quantas tarefas entraram na soma, o n do limite do RM. A tarefa
+ * recusada pelo teste de admissão nunca entrou no sistema: não conta. */
 double sim_utilizacao(const Estado *e, int *n) {
     double u = 0;
     int cont = 0;
     for (int i = 0; i < e->n; i++) {
         const TCB *k = &e->tarefas[i];
+        if (k->recusada) continue;
         double p = utilizacao_parcela(k->tipo, k->servidor, k->duracao, k->periodo);
         if (p < 0) continue;
         u += p;
