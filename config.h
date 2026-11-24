@@ -114,7 +114,7 @@ void config_definir_eventos(TarefaCfg *t, const char *texto);    // Divide a str
 
 void config_liberar_tarefa(TarefaCfg *t);    // Libera a memória associada à string de eventos de uma tarefa
 
-bool config_id_servidor(const char *id, TipoServidor *tipo);    // true se o id indica um servidor (BS seguido de um número, sem diferenciar maiúsculas); o tipo vai para '*tipo' (pode ser NULL)
+bool config_id_servidor(const char *id, TipoServidor *tipo);    // true se o id indica um servidor (BS ou PS seguido de um número, sem diferenciar maiúsculas); o tipo vai para '*tipo' (pode ser NULL)
 
 void config_classificar(TarefaCfg *t);    // Define t->tipo e t->servidor pelo id e pelo sinal do período (req. B 1.2, 1.3 e 2)
 

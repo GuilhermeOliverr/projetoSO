@@ -40,7 +40,8 @@ typedef enum {
     EV_SORTEIO,        // 4: Evento de aplicação do critério 5 de desempate por sorteio determinístico (sinalizado com ?)
     EV_PREEMPCAO,      // 5: Evento de preempção (tarefa é retirada da CPU para dar lugar a outra mais prioritária)
     EV_FIM_QUANTUM,    // 6: Evento de esgotamento da fatia de tempo (quantum) da tarefa em execução
-    EV_QTD             // 7: Quantidade total de categorias de eventos definidas na enumeração
+    EV_DESCARTE,       // 7: Servidor de polling ganhou a CPU sem aperiódica na fila e perdeu a capacidade do período
+    EV_QTD             // 8: Quantidade total de categorias de eventos definidas na enumeração
 } TipoEvento;
 
 // Início da estrutura que registra um evento ocorrido com seu contexto completo

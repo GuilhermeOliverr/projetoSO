@@ -75,6 +75,7 @@ const char *estado_descricao(const TCB *k) {
     case SUSP_PERIODO: return tcb_eh_atendida(k) ? "suspensa: próxima ocorrência" : "suspensa: próximo período";
     case SUSP_USUARIO: return "suspensa: pelo usuário";
     case SUSP_SEM_TRABALHO: return "suspensa: sem aperiódica na fila";
+    case SUSP_SEM_CAPACIDADE: return "suspensa: capacidade esgotada";
     default: return "suspensa";
     }
 }
@@ -107,6 +108,7 @@ const char *tipo_nome(const TCB *k) {
     case TIPO_SERVIDOR:
         switch (k->servidor) {
         case SERV_BS: return "servidor BS";
+        case SERV_PS: return "servidor PS";
         }
         return "servidor";
     default: return "periódica";
@@ -157,6 +159,7 @@ const char *evento_nome(TipoEvento t) {
     case EV_SORTEIO: return "sorteio";
     case EV_PREEMPCAO: return "preempção";
     case EV_FIM_QUANTUM: return "fim de quantum";
+    case EV_DESCARTE: return "capacidade descartada";
     default: return "?";
     }
 }
@@ -302,18 +305,33 @@ static void liberar_ativacao(Simulador *s, int i, int t) {
     }
 }
 
-/* Servidor: no ingresso ele passa a existir e a disputar a CPU sempre que
- * houver aperiódica na fila. O Background Server não tem períodos nem
- * capacidade: esta é a única chegada dele. */
+/* O servidor tem um limite de capacidade por período? Só o Background
+ * Server não tem: ele usa toda CPU que sobra. */
+static bool capacidade_limitada(const TCB *k) {
+    return k->servidor != SERV_BS;
+}
+
+/* Início de um período do servidor (é a "ativação" dele). No ingresso ele
+ * passa a existir; o Polling Server, a cada período, volta a ter a
+ * capacidade inteira (duracao), e o prazo dele no EDF é o fim deste período
+ * pelo campo prazo. O Background Server não tem períodos: a única chegada
+ * dele é a do ingresso. */
 static void chegada_servidor(Simulador *s, int i, int t) {
     TCB *k = &s->atual.tarefas[i];
-    if (k->liberadas > 0 || t < k->proxima_chegada) return;
+    if (t < k->proxima_chegada || (!capacidade_limitada(k) && k->liberadas > 0)) return;
     evento_add(s, t, t, EV_CHEGADA, i, k->liberadas, -1);
     k->liberadas++;
     k->chegada_atual = t;
     k->deadline_abs = t + k->prazo;
-    k->fila_desde = t;
-    if (!suspensa_pelo_usuario(k)) {
+    if (capacidade_limitada(k)) {
+        k->capacidade = k->duracao;
+        k->proxima_chegada += k->periodo;
+        /* Se a edição fez a próxima chegada ficar no passado, reancora no
+         * tick atual, como na periódica. */
+        if (k->proxima_chegada <= t) k->proxima_chegada = t + k->periodo;
+    }
+    if (k->estado == T_NOVA) {   /* acabou de ingressar; disputa a CPU quando tiver o que fazer */
+        k->fila_desde = t;
         k->estado = T_SUSPENSA;
         k->motivo = SUSP_SEM_TRABALHO;
     }
@@ -370,12 +388,24 @@ static void conferir_vinculos(Estado *e) {
     }
 }
 
-/* O servidor disputa a CPU neste tick? Precisa já ter ingressado, não estar
- * suspenso pelo usuário e ter o que executar: a aperiódica que já é dele ou
- * alguma na fila, que ele pega se ganhar a CPU. */
+/* O servidor disputa a CPU neste tick? Precisa já ter ingressado e não
+ * estar suspenso pelo usuário. Além disso:
+ *   - BS: ter o que executar, a aperiódica que já é dele ou alguma na fila
+ *     (que ele pega se ganhar a CPU);
+ *   - PS: ter capacidade. Disputa mesmo com a fila vazia: é quando ganha a
+ *     CPU que ele consulta a fila, e se ela estiver vazia perde a
+ *     capacidade até o próximo período (ver escalonar). */
 static bool servidor_disputa(const TCB *k, int nfila) {
     if (k->estado == T_NOVA || k->estado == T_TERMINADA || suspensa_pelo_usuario(k)) return false;
-    return k->atendendo >= 0 || nfila > 0;
+    switch (k->servidor) {
+    case SERV_PS: return k->capacidade > 0;
+    default: return k->atendendo >= 0 || nfila > 0;
+    }
+}
+
+/* Por que um servidor que não disputa a CPU está parado. */
+static MotivoSuspensao motivo_ocioso(const TCB *k) {
+    return capacidade_limitada(k) && k->capacidade == 0 ? SUSP_SEM_CAPACIDADE : SUSP_SEM_TRABALHO;
 }
 
 /* O Background Server só fica com a CPU que sobraria desligada: perde para
@@ -509,10 +539,11 @@ static bool escalonar(Simulador *s) {
         if (tcb_eh_atendida(k)) continue;   /* executa por meio de um servidor */
         if (tcb_eh_servidor(k)) {
             if (!servidor_disputa(k, nfila)) {
-                /* Sem trabalho: sai da CPU sem que isso seja uma preempção. */
+                /* Sem trabalho ou sem capacidade: sai da CPU sem que isso
+                 * seja uma preempção. */
                 if (k->estado != T_NOVA && k->estado != T_TERMINADA && !suspensa_pelo_usuario(k)) {
                     k->estado = T_SUSPENSA;
-                    k->motivo = SUSP_SEM_TRABALHO;
+                    k->motivo = motivo_ocioso(k);
                     k->cpu = -1;
                     k->quantum_usado = 0;
                 }
@@ -602,9 +633,15 @@ static bool escalonar(Simulador *s) {
         TCB *k = &e->tarefas[i];
         if (fora[i]) {
             /* Servidor sem aperiódica para pegar: sai da disputa sem que
-             * isso seja uma preempção. */
+             * isso seja uma preempção. O Polling Server ganhou a CPU e
+             * achou a fila vazia: perde a capacidade deste período, que
+             * fica para as periódicas. */
+            if (k->servidor == SERV_PS) {
+                k->capacidade = 0;
+                evento_add(s, t, t, EV_DESCARTE, i, k->liberadas - 1, -1);
+            }
             k->estado = T_SUSPENSA;
-            k->motivo = SUSP_SEM_TRABALHO;
+            k->motivo = motivo_ocioso(k);
             k->cpu = -1;
             k->quantum_usado = 0;
             continue;
@@ -721,8 +758,10 @@ static bool executar_tick(Simulador *s) {
             s->cel[base + i] = G_EXEC;
             s->cpu[base + i] = (signed char)k->cpu;
             /* consumiu 1 tick de CPU. O servidor não tem trabalho próprio:
-             * quem consome é a aperiódica dele, que também está executando. */
+             * quem consome é a aperiódica dele, que também está executando;
+             * ele gasta a capacidade. */
             if (!tcb_eh_servidor(k)) k->restante--;
+            else if (capacidade_limitada(k)) k->capacidade--;
             k->ticks_exec++;
             k->quantum_usado++;
             break;
@@ -747,7 +786,24 @@ static bool executar_tick(Simulador *s) {
      * execução porque só agora sabemos se a tarefa terminou neste tick. */
     for (int i = 0; i < e->n; i++) {
         TCB *k = &e->tarefas[i];
-        if (tcb_eh_servidor(k)) continue;   /* não tem ativação própria nem prazo a conferir */
+        if (tcb_eh_servidor(k)) {
+            /* O servidor não tem ativação própria nem prazo a conferir; só a
+             * capacidade. Se ela acabou no meio de uma ativação, a aperiódica
+             * volta para a fila (na frente, porque a fila é por ordem de
+             * chegada) e o servidor espera a recarga. Se a aperiódica acabou
+             * neste mesmo tick, quem a solta é o fim de ativação dela, abaixo. */
+            if (k->estado == T_EXECUTANDO && capacidade_limitada(k) && k->capacidade == 0) {
+                if (k->atendendo >= 0 && e->tarefas[k->atendendo].restante > 0) {
+                    TCB *a = &e->tarefas[k->atendendo];
+                    a->atendida_por = -1;
+                    a->estado = T_PRONTA;
+                    k->atendendo = -1;
+                }
+                k->estado = T_SUSPENSA;
+                k->motivo = SUSP_SEM_CAPACIDADE;
+            }
+            continue;
+        }
         if (k->estado == T_EXECUTANDO && k->restante == 0) {
             /* Uma aperiódica que termina a ativação solta o servidor, que
              * fica livre para pegar a próxima da fila. */
@@ -957,12 +1013,13 @@ bool sim_ids_inteiros(const Estado *e) {
     return true;
 }
 
-/* Parcela de uma tarefa na utilização: C/P da periódica. Aperiódicas e
- * esporádicas não entram (executam dentro dos servidores), nem o Background
- * Server (só usa CPU que ficaria desligada). -1 = não entra. */
+/* Parcela de uma tarefa na utilização: C/P da periódica e capacidade/período
+ * do servidor. Aperiódicas e esporádicas não entram (executam dentro dos
+ * servidores), nem o Background Server (só usa CPU que ficaria desligada).
+ * -1 = não entra. */
 double utilizacao_parcela(TipoTarefa tipo, TipoServidor servidor, int duracao, int periodo) {
-    (void)servidor;
-    if (tipo == TIPO_PERIODICA && periodo > 0) return (double)duracao / periodo;
+    if (periodo <= 0) return -1;
+    if (tipo == TIPO_PERIODICA || (tipo == TIPO_SERVIDOR && servidor != SERV_BS)) return (double)duracao / periodo;
     return -1;
 }
 
@@ -1246,7 +1303,7 @@ void edicao_alternar_suspensao(TCB *k) {
             k->motivo = SUSP_NENHUM;
         } else {
             k->estado = T_SUSPENSA;
-            k->motivo = tcb_eh_servidor(k) ? SUSP_SEM_TRABALHO : SUSP_PERIODO;
+            k->motivo = tcb_eh_servidor(k) ? motivo_ocioso(k) : SUSP_PERIODO;
         }
     } else {
         k->estado = T_SUSPENSA;
