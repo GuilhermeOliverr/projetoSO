@@ -212,6 +212,7 @@ void term_bg(unsigned rgb);         // Emite a sequência de escape ANSI para al
 void term_reset(void);              // Emite a sequência de escape ANSI para restaurar as cores e estilos padrão do terminal
 void term_negrito(void);            // Emite a sequência de escape ANSI para ativar o estilo de texto em negrito no terminal
 void term_fraco(void);              // Emite a sequência de escape ANSI para ativar o estilo de texto esmaecido/suave no terminal
+void term_sublinhado(void);         // Emite a sequência de escape ANSI para ativar o texto sublinhado no terminal
 void term_limpar(void);             // Emite a sequência de escape ANSI para limpar a tela do terminal (ativo apenas se g_usar_cores for true)
 int  term_largura(void);            // Retorna a quantidade de colunas da janela do terminal (padrão de 100 colunas)
 

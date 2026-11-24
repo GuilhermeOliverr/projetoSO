@@ -352,6 +352,36 @@ void tela_hachurado(Tela *t, int x, int y, int w, int h) {
     tela_moldura(t, x, y, w, h, 0x999999);
 }
 
+/* Servidor executando (req. B 4): a cor dele com listras diagonais mais
+ * claras (metade do caminho até o branco) e borda de 2 pixels, para não se
+ * confundir com o preenchimento sólido das periódicas. */
+void tela_listrado(Tela *t, int x, int y, int w, int h, uint32_t cor) {
+    uint32_t clara = ((cor & 0xFEFEFE) >> 1) + 0x7F7F7F;
+    tela_ret(t, x, y, w, h, cor);
+    for (int j = 0; j < h; j++)
+        for (int i = 0; i < w; i++)
+            if ((x + i + y + j) % 7 < 2) ponto(t, x + i, y + j, clara);
+    tela_moldura(t, x, y, w, h, 0x000000);
+    tela_moldura(t, x + 1, y + 1, w - 2, h - 2, 0x000000);
+}
+
+/* Borda tracejada de 2 pixels (traços de 4, espaços de 2): a aperiódica
+ * executando (req. B 4), por cima da cor sólida dela. */
+void tela_tracejado_grosso(Tela *t, int x, int y, int w, int h, uint32_t cor) {
+    for (int i = 0; i < w; i++)
+        if (i % 6 < 4)
+            for (int d = 0; d < 2; d++) {
+                ponto(t, x + i, y + d, cor);
+                ponto(t, x + i, y + h - 1 - d, cor);
+            }
+    for (int j = 0; j < h; j++)
+        if (j % 6 < 4)
+            for (int d = 0; d < 2; d++) {
+                ponto(t, x + d, y + j, cor);
+                ponto(t, x + w - 1 - d, y + j, cor);
+            }
+}
+
 /* Bresenham: anda pelo eixo mais longo e decide pelo erro acumulado quando
  * dar um passo no outro. A espessura é um quadrado pintado em cada ponto. */
 void tela_linha(Tela *t, int x0, int y0, int x1, int y1, int esp, uint32_t cor) {

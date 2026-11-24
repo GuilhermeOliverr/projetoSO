@@ -9,7 +9,13 @@
  *  - um bloco extra com uma linha por CPU mostra qual tarefa ocupou cada
  *    processador e quando ele ficou desligado;
  *  - marcadores no instante exato: chegada, fim de ativação, término,
- *    perda de prazo e sorteio.
+ *    perda de prazo e sorteio;
+ *  - Projeto B (req. B 4): o servidor executando aparece listrado e com
+ *    borda grossa, a aperiódica executando com borda tracejada grossa (no
+ *    terminal, '/' e sublinhado), a linha da CPU mostra "PS1:A1" (servidor e
+ *    a aperiódica que ele executava), e há marcadores para recusa no teste
+ *    de admissão, recarga do Sporadic Server e capacidade descartada pelo
+ *    Polling Server.
  */
 #ifndef GANTT_H
 #define GANTT_H
@@ -24,7 +30,13 @@ enum {
     M_TERMINO = 4,     // Bit 2 (4): Marcador de término definitivo da 10ª ativação (■)
     M_PRAZO = 8,     // Bit 3 (8): Marcador de perda de prazo / deadline miss (✗ em vermelho)
     M_SORTEIO = 16,    // Bit 4 (16): Marcador de sorteio no critério 5 de desempate (?)
+    M_RECUSA = 32,     // Bit 5 (32): Tarefa ou ativação recusada pelo teste de admissão (⊘)
+    M_RECARGA = 64,    // Bit 6 (64): Sporadic Server recebeu capacidade de volta (⊕)
+    M_DESCARTE = 128,  // Bit 7 (128): Polling Server perdeu a capacidade do período (⊖)
 };
+
+// Quem ocupou a CPU 'cpu' no tick 'tick' (-1 = ninguém): o servidor, quando executava uma aperiódica, que vai em '*atendida' (-1 se não havia; pode ser NULL)
+int gantt_quem_na_cpu(const Simulador *s, int tick, int cpu, int *atendida);
 
 void gantt_mascaras(const Simulador *s, int ini, int fim, unsigned char *mask);      // Preenche a matriz de máscaras combinando os eventos ocorridos em cada célula (tarefa x tick) para a faixa [ini, fim)  
 

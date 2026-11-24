@@ -1192,6 +1192,10 @@ void term_fraco(void) {
     if (g_usar_cores) fputs("\x1b[2m", stdout);
 }
 
+void term_sublinhado(void) {
+    if (g_usar_cores) fputs("\x1b[4m", stdout);
+}
+
 void term_limpar(void) {
     /* Sem cores assumimos saída não interativa (arquivo, pipe): não faz
      * sentido limpar, e as sequências sujariam o texto. */

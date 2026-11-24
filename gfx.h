@@ -130,6 +130,8 @@ void tela_moldura(Tela *t, int x, int y, int w, int h, uint32_t cor);      // De
 void tela_tracejado(Tela *t, int x, int y, int w, int h, uint32_t cor);    // Desenha o contorno de um retângulo com linhas tracejadas na cor especificada
 void tela_pontilhado(Tela *t, int x, int y, int w, int h);                 // Desenha o preenchimento em padrão preto pontilhado para tarefas no estado suspenso (Requisito 2.1)
 void tela_hachurado(Tela *t, int x, int y, int w, int h);                  // Desenha o preenchimento hachurado (listras) para indicar CPUs ociosas ou desligadas no Gantt
+void tela_listrado(Tela *t, int x, int y, int w, int h, uint32_t cor);     // Servidor executando (req. B 4): a cor com listras diagonais claras e borda grossa
+void tela_tracejado_grosso(Tela *t, int x, int y, int w, int h, uint32_t cor);    // Borda tracejada de 2 pixels (aperiódica executando, req. B 4)
 void tela_linha(Tela *t, int x0, int y0, int x1, int y1, int espessura, uint32_t cor);    // Desenha uma linha entre (x0, y0) e (x1, y1) com a espessura e cor informadas
 void tela_triangulo(Tela *t, int x0, int y0, int x1, int y1, int x2, int y2, uint32_t cor);    // Desenha um triângulo preenchido definido por três vértices (usado em marcadores/setas)
 void tela_circulo(Tela *t, int cx, int cy, int r, uint32_t cor);    // Desenha um círculo preenchido com centro em (cx, cy) e raio 'r' na cor especificada
