@@ -110,6 +110,7 @@ const char *tipo_nome(const TCB *k) {
         case SERV_BS: return "servidor BS";
         case SERV_PS: return "servidor PS";
         case SERV_DS: return "servidor DS";
+        case SERV_SS: return "servidor SS";
         }
         return "servidor";
     default: return "periódica";
@@ -161,6 +162,7 @@ const char *evento_nome(TipoEvento t) {
     case EV_PREEMPCAO: return "preempção";
     case EV_FIM_QUANTUM: return "fim de quantum";
     case EV_DESCARTE: return "capacidade descartada";
+    case EV_RECARGA: return "recarga";
     default: return "?";
     }
 }
@@ -192,6 +194,7 @@ void tcb_iniciar(TCB *k, const TarefaCfg *t) {
     k->cpu = -1;                   /* -1 = não está em nenhuma CPU            */
     k->atendendo = -1;             /* servidor sem aperiódica                 */
     k->atendida_por = -1;          /* aperiódica na fila (quando chegar)      */
+    k->ss_ativo_desde = -1;        /* Sporadic Server ocioso                  */
     k->termino = -1;               /* -1 = ainda não terminou                 */
 }
 
@@ -312,20 +315,73 @@ static bool capacidade_limitada(const TCB *k) {
     return k->servidor != SERV_BS;
 }
 
+/* Sporadic Server: devolve a capacidade das recargas que venceram. */
+static void aplicar_recargas(Simulador *s, int i, int t) {
+    TCB *k = &s->atual.tarefas[i];
+    int j = 0;
+    while (j < k->nrecargas && k->recargas[j].instante <= t) {
+        k->capacidade += k->recargas[j].quantidade;
+        if (k->capacidade > k->duracao) k->capacidade = k->duracao;
+        evento_add(s, t, t, EV_RECARGA, i, k->liberadas - 1, -1);
+        j++;
+    }
+    if (j == 0) return;
+    memmove(k->recargas, k->recargas + j, (size_t)(k->nrecargas - j) * sizeof k->recargas[0]);
+    k->nrecargas -= j;
+}
+
+/* Sporadic Server: ficou ativo no instante t (passou a ter capacidade e
+ * aperiódica para executar). A capacidade que ele gastar daqui em diante
+ * volta um período depois de t, e no EDF o prazo dele é t + prazo. É uma
+ * "ativação" do servidor, por isso vira uma chegada no Gantt. */
+static void ss_ativar(Simulador *s, int i, int t) {
+    TCB *k = &s->atual.tarefas[i];
+    k->ss_ativo_desde = t;
+    k->ss_consumo = 0;
+    k->chegada_atual = t;
+    k->deadline_abs = t + k->prazo;
+    evento_add(s, t, t, EV_CHEGADA, i, k->liberadas, -1);
+    k->liberadas++;
+}
+
+/* Sporadic Server: ficou ocioso (sem aperiódica ou sem capacidade). Agenda
+ * a volta do que gastou desde que ficou ativo para um período depois de
+ * ficar ativo (ou agora, se esse instante já passou). */
+static void ss_desativar(TCB *k, int t) {
+    if (k->ss_ativo_desde < 0) return;
+    if (k->ss_consumo > 0) {
+        int quando = k->ss_ativo_desde + k->periodo;
+        if (quando < t) quando = t;
+        if (k->nrecargas < MAX_RECARGAS) {
+            k->recargas[k->nrecargas].instante = quando;
+            k->recargas[k->nrecargas].quantidade = k->ss_consumo;
+            k->nrecargas++;
+        } else {   /* vetor cheio: junta com a última e adia (ver MAX_RECARGAS) */
+            k->recargas[MAX_RECARGAS - 1].instante = quando;
+            k->recargas[MAX_RECARGAS - 1].quantidade += k->ss_consumo;
+        }
+    }
+    k->ss_ativo_desde = -1;
+    k->ss_consumo = 0;
+}
+
 /* Início de um período do servidor (é a "ativação" dele). No ingresso ele
- * passa a existir; o Polling e o Deferrable Server, a cada período, voltam
- * a ter a capacidade inteira (duracao), e o prazo dele no EDF é o fim deste período
- * pelo campo prazo. O Background Server não tem períodos: a única chegada
- * dele é a do ingresso. */
+ * passa a existir com a capacidade inteira (duracao); o Polling e o
+ * Deferrable Server voltam a tê-la inteira a cada período, e o prazo deles
+ * no EDF é o início do período mais o campo prazo. O Background Server não
+ * tem períodos, e o Sporadic Server não recarga por período (só pelo que
+ * gastou, ver ss_desativar): a única chegada deles é a do ingresso. */
 static void chegada_servidor(Simulador *s, int i, int t) {
     TCB *k = &s->atual.tarefas[i];
-    if (t < k->proxima_chegada || (!capacidade_limitada(k) && k->liberadas > 0)) return;
+    if (k->servidor == SERV_SS) aplicar_recargas(s, i, t);
+    bool por_periodo = k->servidor == SERV_PS || k->servidor == SERV_DS;
+    if (t < k->proxima_chegada || (!por_periodo && k->liberadas > 0)) return;
     evento_add(s, t, t, EV_CHEGADA, i, k->liberadas, -1);
     k->liberadas++;
     k->chegada_atual = t;
     k->deadline_abs = t + k->prazo;
-    if (capacidade_limitada(k)) {
-        k->capacidade = k->duracao;
+    if (capacidade_limitada(k)) k->capacidade = k->duracao;
+    if (por_periodo) {
         k->proxima_chegada += k->periodo;
         /* Se a edição fez a próxima chegada ficar no passado, reancora no
          * tick atual, como na periódica. */
@@ -396,15 +452,16 @@ static void conferir_vinculos(Estado *e) {
  *   - PS: ter capacidade. Disputa mesmo com a fila vazia: é quando ganha a
  *     CPU que ele consulta a fila, e se ela estiver vazia perde a
  *     capacidade até o próximo período (ver escalonar);
- *   - DS: ter capacidade E o que executar. Com a fila vazia ele não
- *     disputa e guarda a capacidade ("adia" o uso): uma aperiódica que
+ *   - DS e SS: ter capacidade E o que executar. Com a fila vazia eles não
+ *     disputam e guardam a capacidade ("adiam" o uso): uma aperiódica que
  *     chega no meio do período é atendida na hora. */
 static bool servidor_disputa(const TCB *k, int nfila) {
     if (k->estado == T_NOVA || k->estado == T_TERMINADA || suspensa_pelo_usuario(k)) return false;
     bool tem_trabalho = k->atendendo >= 0 || nfila > 0;
     switch (k->servidor) {
     case SERV_PS: return k->capacidade > 0;
-    case SERV_DS: return k->capacidade > 0 && tem_trabalho;
+    case SERV_DS:
+    case SERV_SS: return k->capacidade > 0 && tem_trabalho;
     default: return tem_trabalho;
     }
 }
@@ -545,6 +602,7 @@ static bool escalonar(Simulador *s) {
         if (tcb_eh_atendida(k)) continue;   /* executa por meio de um servidor */
         if (tcb_eh_servidor(k)) {
             if (!servidor_disputa(k, nfila)) {
+                ss_desativar(k, t);
                 /* Sem trabalho ou sem capacidade: sai da CPU sem que isso
                  * seja uma preempção. */
                 if (k->estado != T_NOVA && k->estado != T_TERMINADA && !suspensa_pelo_usuario(k)) {
@@ -560,6 +618,9 @@ static bool escalonar(Simulador *s) {
                 k->motivo = SUSP_NENHUM;
                 k->fila_desde = t;
             }
+            /* Sporadic Server que fica ativo agora: o prazo no EDF já é o
+             * desta ativação (ss_ativar confirma depois da seleção). */
+            if (k->servidor == SERV_SS && k->ss_ativo_desde < 0) k->deadline_abs = t + k->prazo;
         } else if (!((k->estado == T_PRONTA || k->estado == T_EXECUTANDO) && k->restante > 0)) {
             continue;
         }
@@ -637,6 +698,8 @@ static bool escalonar(Simulador *s) {
     for (int j = 0; j < nc; j++) {
         int i = cand[j];
         TCB *k = &e->tarefas[i];
+        /* Sporadic Server que disputa e não saiu da disputa: está ativo. */
+        if (!fora[i] && tcb_eh_servidor(k) && k->servidor == SERV_SS && k->ss_ativo_desde < 0) ss_ativar(s, i, t);
         if (fora[i]) {
             /* Servidor sem aperiódica para pegar: sai da disputa sem que
              * isso seja uma preempção. O Polling Server ganhou a CPU e
@@ -646,6 +709,7 @@ static bool escalonar(Simulador *s) {
                 k->capacidade = 0;
                 evento_add(s, t, t, EV_DESCARTE, i, k->liberadas - 1, -1);
             }
+            ss_desativar(k, t);
             k->estado = T_SUSPENSA;
             k->motivo = motivo_ocioso(k);
             k->cpu = -1;
@@ -767,7 +831,10 @@ static bool executar_tick(Simulador *s) {
              * quem consome é a aperiódica dele, que também está executando;
              * ele gasta a capacidade. */
             if (!tcb_eh_servidor(k)) k->restante--;
-            else if (capacidade_limitada(k)) k->capacidade--;
+            else if (capacidade_limitada(k)) {
+                k->capacidade--;
+                if (k->servidor == SERV_SS) k->ss_consumo++;
+            }
             k->ticks_exec++;
             k->quantum_usado++;
             break;

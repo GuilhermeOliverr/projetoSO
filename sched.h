@@ -38,7 +38,7 @@ typedef enum {
     TIPO_PERIODICA,   // período > 0: uma ativação por período, 10 ao todo (req. 4.4 do Projeto A)
     TIPO_APERIODICA,  // período = 0 (req. B 1.2): chega nos instantes de lista_eventos, ou só no ingresso
     TIPO_ESPORADICA,  // período < 0 (req. B 1.3): |período| = intervalo mínimo entre duas ocorrências
-    TIPO_SERVIDOR     // id BSxx, PSxx ou DSxx (req. B 2): tarefa que executa as aperiódicas e esporádicas
+    TIPO_SERVIDOR     // id BSxx, PSxx, DSxx ou SSxx (req. B 2): tarefa que executa as aperiódicas e esporádicas
 } TipoTarefa;
 
 /* Qual servidor (req. B 2). Os campos da linha de configuração continuam
@@ -47,8 +47,22 @@ typedef enum {
 typedef enum {
     SERV_BS,  // Background Server: executa só quando uma CPU ficaria desligada
     SERV_PS,  // Polling Server: recarrega a capacidade a cada período; se ganha a CPU sem aperiódica na fila, perde a capacidade até o próximo
-    SERV_DS   // Deferrable Server: recarrega a cada período, mas guarda a capacidade até aparecer uma aperiódica
+    SERV_DS,  // Deferrable Server: recarrega a cada período, mas guarda a capacidade até aparecer uma aperiódica
+    SERV_SS   // Sporadic Server: repõe só o que gastou, um período depois de ficar ativo
 } TipoServidor;
+
+/* Recargas agendadas de um Sporadic Server. Cada vez que ele fica ativo e
+ * depois para, o que gastou nesse trecho volta um período depois do
+ * instante em que ficou ativo. Cada trecho gasta ao menos 1 tick, então há
+ * no máximo `duracao` recargas pendentes; o vetor é fixo para o TCB
+ * continuar copiável com memcpy, e se encher a recarga nova é somada à
+ * última e adiada para o instante dela (atrasar uma recarga nunca deixa o
+ * servidor usar mais que a capacidade). */
+#define MAX_RECARGAS 16
+typedef struct {
+    int instante;     // quando a capacidade volta
+    int quantidade;   // quanto volta
+} RecargaSS;
 
 /* Tamanho do id da tarefa contando o '\0' final: até ID_MAX-1 = 31 bytes.
  *
@@ -147,6 +161,10 @@ typedef struct {
     int atendendo;             // Servidor: índice da aperiódica/esporádica que ele está executando (-1 = nenhuma)
     int atendida_por;          // Aperiódica/esporádica: índice do servidor que a tirou da fila (-1 = está na fila)
     int capacidade;            // Servidor: ticks de CPU que ainda pode usar até a próxima recarga (o BS não tem limite e não usa)
+    int ss_ativo_desde;        // Sporadic Server: instante em que ficou ativo (-1 = ocioso); a recarga é um período depois
+    int ss_consumo;            // Sporadic Server: capacidade gasta desde que ficou ativo (é o que vai voltar)
+    int nrecargas;             // Sporadic Server: quantas recargas estão agendadas em `recargas`
+    RecargaSS recargas[MAX_RECARGAS];   // Sporadic Server: recargas agendadas, em ordem de instante
 
     /* ---- prioridade (menor valor = mais prioritária) ----
      * nominal: a que o algoritmo dá à tarefa (RM: período; EDF: deadline
@@ -175,7 +193,7 @@ bool ativacao_atual_perdeu_prazo(const TCB *k);    // true se a ativação em an
 int tcb_total_ativacoes(const TCB *k);    // Quantas ativações a tarefa tem ao todo; quando chega a esse número de concluídas, ela termina
 int tcb_chegada(const TCB *k, int j);     // Instante em que chegou a ativação j (de 0 a liberadas-1)
 
-bool tcb_eh_servidor(const TCB *k);       // true se a tarefa é um servidor (BSxx, PSxx ou DSxx)
+bool tcb_eh_servidor(const TCB *k);       // true se a tarefa é um servidor (BSxx, PSxx, DSxx ou SSxx)
 bool tcb_eh_atendida(const TCB *k);       // true se é aperiódica ou esporádica: só executa por meio de um servidor (req. B 1.1)
 const char *tipo_nome(const TCB *k);      // Nome do tipo para as telas: "periódica", "aperiódica", "esporádica" ou "servidor BS"
 void tcb_ativacoes_txt(const TCB *k, char *buf, size_t tam);    // "concluídas/total" para as tabelas; "-" num servidor, que não tem ativações contadas
