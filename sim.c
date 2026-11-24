@@ -109,6 +109,7 @@ const char *tipo_nome(const TCB *k) {
         switch (k->servidor) {
         case SERV_BS: return "servidor BS";
         case SERV_PS: return "servidor PS";
+        case SERV_DS: return "servidor DS";
         }
         return "servidor";
     default: return "periódica";
@@ -312,8 +313,8 @@ static bool capacidade_limitada(const TCB *k) {
 }
 
 /* Início de um período do servidor (é a "ativação" dele). No ingresso ele
- * passa a existir; o Polling Server, a cada período, volta a ter a
- * capacidade inteira (duracao), e o prazo dele no EDF é o fim deste período
+ * passa a existir; o Polling e o Deferrable Server, a cada período, voltam
+ * a ter a capacidade inteira (duracao), e o prazo dele no EDF é o fim deste período
  * pelo campo prazo. O Background Server não tem períodos: a única chegada
  * dele é a do ingresso. */
 static void chegada_servidor(Simulador *s, int i, int t) {
@@ -394,12 +395,17 @@ static void conferir_vinculos(Estado *e) {
  *     (que ele pega se ganhar a CPU);
  *   - PS: ter capacidade. Disputa mesmo com a fila vazia: é quando ganha a
  *     CPU que ele consulta a fila, e se ela estiver vazia perde a
- *     capacidade até o próximo período (ver escalonar). */
+ *     capacidade até o próximo período (ver escalonar);
+ *   - DS: ter capacidade E o que executar. Com a fila vazia ele não
+ *     disputa e guarda a capacidade ("adia" o uso): uma aperiódica que
+ *     chega no meio do período é atendida na hora. */
 static bool servidor_disputa(const TCB *k, int nfila) {
     if (k->estado == T_NOVA || k->estado == T_TERMINADA || suspensa_pelo_usuario(k)) return false;
+    bool tem_trabalho = k->atendendo >= 0 || nfila > 0;
     switch (k->servidor) {
     case SERV_PS: return k->capacidade > 0;
-    default: return k->atendendo >= 0 || nfila > 0;
+    case SERV_DS: return k->capacidade > 0 && tem_trabalho;
+    default: return tem_trabalho;
     }
 }
 

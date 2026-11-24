@@ -38,7 +38,7 @@ typedef enum {
     TIPO_PERIODICA,   // período > 0: uma ativação por período, 10 ao todo (req. 4.4 do Projeto A)
     TIPO_APERIODICA,  // período = 0 (req. B 1.2): chega nos instantes de lista_eventos, ou só no ingresso
     TIPO_ESPORADICA,  // período < 0 (req. B 1.3): |período| = intervalo mínimo entre duas ocorrências
-    TIPO_SERVIDOR     // id BSxx ou PSxx (req. B 2): tarefa que executa as aperiódicas e esporádicas
+    TIPO_SERVIDOR     // id BSxx, PSxx ou DSxx (req. B 2): tarefa que executa as aperiódicas e esporádicas
 } TipoTarefa;
 
 /* Qual servidor (req. B 2). Os campos da linha de configuração continuam
@@ -46,7 +46,8 @@ typedef enum {
  * prazo = prazo de cada período. */
 typedef enum {
     SERV_BS,  // Background Server: executa só quando uma CPU ficaria desligada
-    SERV_PS   // Polling Server: recarrega a capacidade a cada período; se ganha a CPU sem aperiódica na fila, perde a capacidade até o próximo
+    SERV_PS,  // Polling Server: recarrega a capacidade a cada período; se ganha a CPU sem aperiódica na fila, perde a capacidade até o próximo
+    SERV_DS   // Deferrable Server: recarrega a cada período, mas guarda a capacidade até aparecer uma aperiódica
 } TipoServidor;
 
 /* Tamanho do id da tarefa contando o '\0' final: até ID_MAX-1 = 31 bytes.
@@ -174,7 +175,7 @@ bool ativacao_atual_perdeu_prazo(const TCB *k);    // true se a ativação em an
 int tcb_total_ativacoes(const TCB *k);    // Quantas ativações a tarefa tem ao todo; quando chega a esse número de concluídas, ela termina
 int tcb_chegada(const TCB *k, int j);     // Instante em que chegou a ativação j (de 0 a liberadas-1)
 
-bool tcb_eh_servidor(const TCB *k);       // true se a tarefa é um servidor (BSxx ou PSxx)
+bool tcb_eh_servidor(const TCB *k);       // true se a tarefa é um servidor (BSxx, PSxx ou DSxx)
 bool tcb_eh_atendida(const TCB *k);       // true se é aperiódica ou esporádica: só executa por meio de um servidor (req. B 1.1)
 const char *tipo_nome(const TCB *k);      // Nome do tipo para as telas: "periódica", "aperiódica", "esporádica" ou "servidor BS"
 void tcb_ativacoes_txt(const TCB *k, char *buf, size_t tam);    // "concluídas/total" para as tabelas; "-" num servidor, que não tem ativações contadas

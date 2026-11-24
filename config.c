@@ -57,8 +57,8 @@
  *    continuam valendo pelo número ("01" é o mesmo id que "1");
  *  - campo vazio recebe o valor padrão, com aviso (req. 3.2);
  *  - o período diz o tipo da tarefa: > 0 periódica, 0 aperiódica e < 0
- *    esporádica (req. B 1.2 e 1.3); o id BSxx ou PSxx indica um servidor
- *    (req. B 2).
+ *    esporádica (req. B 1.2 e 1.3); o id BSxx, PSxx ou DSxx indica um
+ *    servidor (req. B 2).
  *    Aperiódicas e esporádicas sem nenhum servidor no arquivo são ignoradas
  *    com aviso, porque nunca executariam (req. B 1.1).
  *
@@ -224,7 +224,7 @@ void config_definir_eventos(TarefaCfg *t, const char *texto) {
     }
 }
 
-/* Servidor = BS ou PS seguido de um número (req. B 2: "BSxx", onde xx
+/* Servidor = BS, PS ou DS seguido de um número (req. B 2: "BSxx", onde xx
  * diferencia os servidores do mesmo tipo). Sem diferenciar maiúsculas, como o resto do
  * arquivo: "bs1" também é servidor. "BS" sozinho ou "BSA" não são: o id
  * fica sendo o de uma tarefa comum. */
@@ -232,6 +232,7 @@ bool config_id_servidor(const char *id, TipoServidor *tipo) {
     static const struct { const char *prefixo; TipoServidor tipo; } servidores[] = {
         {"BS", SERV_BS},
         {"PS", SERV_PS},
+        {"DS", SERV_DS},
     };
     for (size_t i = 0; i < sizeof servidores / sizeof servidores[0]; i++) {
         const char *p = servidores[i].prefixo;
@@ -773,7 +774,7 @@ static void descartar_sem_servidor(Config *cfg) {
         TarefaCfg *t = &cfg->tarefas[i];
         if (t->tipo == TIPO_APERIODICA || t->tipo == TIPO_ESPORADICA) {
             msg_add(&cfg->avisos, "%s:%d: tarefa %s é %s (periodo = %d) e foi ignorada: não há nenhum servidor "
-                    "(BSxx ou PSxx) para executá-la", cfg->caminho, t->linha, t->id,
+                    "(BSxx, PSxx ou DSxx) para executá-la", cfg->caminho, t->linha, t->id,
                     t->tipo == TIPO_APERIODICA ? "aperiódica" : "esporádica", t->periodo);
             config_liberar_tarefa(t);
         } else {
