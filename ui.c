@@ -1104,7 +1104,7 @@ void ui_passo_a_passo(const Config *cfg, const OpcoesUI *op) {
         char *resto = str_trim(buf + (cmd ? 1 : 0));
         int arg = 0;
         bool tem_arg = parse_int(resto, &arg) == 0;
-        if (cmd && !strchr("npgrstea+kcvfxhq", cmd)) {
+        if (cmd && !strchr("npgrsteda+kcvfxhq", cmd)) {
             fmsg(msg, sizeof msg, "erro: comando '%s' desconhecido (h mostra a ajuda)", buf);
             continue;
         }
