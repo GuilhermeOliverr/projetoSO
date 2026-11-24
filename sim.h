@@ -42,7 +42,8 @@ typedef enum {
     EV_FIM_QUANTUM,    // 6: Evento de esgotamento da fatia de tempo (quantum) da tarefa em execução
     EV_DESCARTE,       // 7: Servidor de polling ganhou a CPU sem aperiódica na fila e perdeu a capacidade do período
     EV_RECARGA,        // 8: Sporadic Server recebeu de volta a capacidade gasta um período antes
-    EV_QTD             // 9: Quantidade total de categorias de eventos definidas na enumeração
+    EV_RECUSA,         // 9: O teste de admissão recusou a tarefa (no ingresso) ou uma ativação de aperiódica (ao entrar na fila)
+    EV_QTD             // 10: Quantidade total de categorias de eventos definidas na enumeração
 } TipoEvento;
 
 // Início da estrutura que registra um evento ocorrido com seu contexto completo
@@ -55,6 +56,22 @@ typedef struct {
     int cpu;          // Identificador da CPU envolvida na ocorrência do evento (-1 se ocorreu na fila de prontos)
 } Evento;
 
+/* Resultado do teste de admissão (req. B 3, ver admissao.h). */
+typedef enum {
+    ADM_ACEITA,         // o teste garante que todos os prazos continuam sendo cumpridos
+    ADM_SEM_GARANTIA,   // a condição necessária passa, mas nenhum teste suficiente fecha: entra, com aviso
+    ADM_RECUSADA        // não entra no sistema
+} ResultadoAdmissao;
+
+/* Uma decisão do teste de admissão, com o motivo para mostrar ao usuário. */
+typedef struct {
+    int tick;                    // tick em que foi decidida (descartada ao editar o passado, como os eventos)
+    int tarefa;                  // índice da tarefa no vetor de TCBs
+    int ativacao;                // -1 = a tarefa (no ingresso); >= 0 = a ativação da aperiódica que entrou na fila
+    ResultadoAdmissao resultado;
+    char motivo[240];            // teste usado e os números dele
+} RegistroAdmissao;
+
 // Enumeração dos estados visuais de uma célula da grade do Gantt (Vazio, Na Fila, Executando, Suspensa)
 typedef enum { G_VAZIO, G_PRONTA, G_EXEC, G_SUSPENSA } CelulaGantt;
 
@@ -64,6 +81,7 @@ typedef struct {
     int ncpus, quantum;     // Número de CPUs físicas ativas e valor do quantum de tempo configurados no tick 
     int alg;     // Índice do algoritmo de escalonamento ativo no registro de escalonadores (ex: RM ou EDF) 
     uint64_t rng;     // Estado interno de 64 bits do gerador de números aleatórios para manter o determinismo no sorteio 
+    bool admissao;     // Teste de admissão ligado (req. B 3); --sem-admissao desliga
     int n;     // Quantidade total de tarefas existentes no sistema neste instante 
     TCB *tarefas;     // Vetor contendo a cópia do estado de cada TCB no instante do snapshot 
     bool fim;     // Booleana que indica se todas as tarefas completaram suas 10 ativações
@@ -83,12 +101,15 @@ typedef struct {
     Evento *ev;     // Vetor dinâmico com o histórico de todos os eventos registrados durante a simulação 
     int nev, capev;     // Quantidade atual de eventos armazenados e capacidade alocada do vetor de eventos 
     char erro[400];     // Por que o último sim_avancar parou ("" = não parou por erro): o escalonador não conseguiu calcular uma prioridade
+    RegistroAdmissao *adm;     // Decisões do teste de admissão, na ordem em que aconteceram
+    int nadm, capadm;          // Quantidade de decisões e capacidade alocada
 
 } Simulador;
 
 const char *evento_nome(TipoEvento t);    // Retorna o nome em texto descritivo do tipo de evento 't' (usado em logs e legendas)
+const char *admissao_nome(ResultadoAdmissao r);    // "aceita", "aceita sem garantia" ou "recusada"
 
-void sim_iniciar(Simulador *s, const Config *cfg, bool historico, uint64_t semente);    // Inicializa o simulador 's' a partir das configurações 'cfg', aloca estruturas e grava o tick 0
+void sim_iniciar(Simulador *s, const Config *cfg, bool historico, uint64_t semente, bool admissao);    // Inicializa o simulador 's' a partir das configurações 'cfg' (com ou sem o teste de admissão), aloca estruturas e grava o tick 0
 void sim_liberar(Simulador *s);    // Libera toda a memória dinâmica alocada pelo simulador (snapshots, eventos, rastro do Gantt)
 
 bool sim_avancar(Simulador *s);           // Avança 1 tick e salva o snapshot; false se já acabou ou se o escalonador falhou (motivo em s->erro, estado de antes do tick)

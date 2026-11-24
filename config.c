@@ -58,9 +58,8 @@
  *  - campo vazio recebe o valor padrão, com aviso (req. 3.2);
  *  - o período diz o tipo da tarefa: > 0 periódica, 0 aperiódica e < 0
  *    esporádica (req. B 1.2 e 1.3); o id BSxx, PSxx, DSxx ou SSxx indica um
- *    servidor (req. B 2).
- *    Aperiódicas e esporádicas sem nenhum servidor no arquivo são ignoradas
- *    com aviso, porque nunca executariam (req. B 1.1).
+ *    servidor (req. B 2). Se cada tarefa entra no sistema quem decide é o
+ *    teste de admissão, durante a simulação (admissao.c).
  *
  * Fluxo de config_carregar (lá no fim do arquivo):
  *   ler_arquivo -> para cada linha: ler_linha_sistema (1ª linha útil) ou
@@ -764,27 +763,6 @@ void leitor_fechar(LeitorLinhas *l) {
     l->texto = l->p = NULL;
 }
 
-/* Aperiódicas e esporádicas só executam por meio de um servidor (req. B
- * 1.1). Sem nenhum servidor no arquivo elas nunca executariam e a simulação
- * não acabaria; então saem da configuração, com aviso. */
-static void descartar_sem_servidor(Config *cfg) {
-    for (int i = 0; i < cfg->n; i++)
-        if (cfg->tarefas[i].tipo == TIPO_SERVIDOR) return;
-    int j = 0;
-    for (int i = 0; i < cfg->n; i++) {
-        TarefaCfg *t = &cfg->tarefas[i];
-        if (t->tipo == TIPO_APERIODICA || t->tipo == TIPO_ESPORADICA) {
-            msg_add(&cfg->avisos, "%s:%d: tarefa %s é %s (periodo = %d) e foi ignorada: não há nenhum servidor "
-                    "(BSxx, PSxx, DSxx ou SSxx) para executá-la", cfg->caminho, t->linha, t->id,
-                    t->tipo == TIPO_APERIODICA ? "aperiódica" : "esporádica", t->periodo);
-            config_liberar_tarefa(t);
-        } else {
-            cfg->tarefas[j++] = *t;
-        }
-    }
-    cfg->n = j;
-}
-
 /*É a função principal do módulo. Carrega o arquivo de configuração, descarta 
  * a marcação BOM de arquivos UTF-8 do Windows, percorre o arquivo linha por linha, 
  * chama o parser da linha do sistema e das tarefas e verifica os erros fatais. 
@@ -819,7 +797,6 @@ bool config_carregar(const char *caminho, Config *cfg) {
     free(vistos.id);
     free(vistos.linha);
     leitor_fechar(&l);
-    if (cfg->erros.n == 0) descartar_sem_servidor(cfg);
 
     /* Checagens do arquivo como um todo (req. 3.3.1: pelo menos 2 linhas). */
     if (!viu_sistema) {

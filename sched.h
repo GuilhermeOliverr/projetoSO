@@ -166,6 +166,11 @@ typedef struct {
     int nrecargas;             // Sporadic Server: quantas recargas estão agendadas em `recargas`
     RecargaSS recargas[MAX_RECARGAS];   // Sporadic Server: recargas agendadas, em ordem de instante
 
+    /* ---- teste de admissão (req. B 3) ---- */
+    bool admitida;             // Passou pelo teste no ingresso e entrou no sistema
+    bool recusada;             // O teste recusou a tarefa no ingresso: ela fica terminada sem executar (estado T_TERMINADA)
+    int recusas;               // Aperiódica: ativações recusadas pelo teste ao entrar na fila (contam como concluídas, sem executar)
+
     /* ---- prioridade (menor valor = mais prioritária) ----
      * nominal: a que o algoritmo dá à tarefa (RM: período; EDF: deadline
      *          absoluto), recalculada a cada tick por sched_atualizar;

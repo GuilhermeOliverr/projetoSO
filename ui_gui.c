@@ -1705,7 +1705,7 @@ static void linhas_estatisticas(const Simulador *s, Linhas *L) {
         tcb_ativacoes_txt(k, ativ, sizeof ativ);
         lin_add(L, C_TEXTO, false, "%*s%s %7s %7d %7d %7d %8.1f %8d %6d %7d %7s", folga(k->id, 6), "", k->id, ativ,
                 k->deadlines_perdidos, k->ticks_exec, k->ticks_espera,
-                k->concluidas ? (double)k->resposta_soma / k->concluidas : 0.0, k->resposta_max, k->preempcoes,
+                k->concluidas > k->recusas ? (double)k->resposta_soma / (k->concluidas - k->recusas) : 0.0, k->resposta_max, k->preempcoes,
                 k->sorteios, term);
         L->v[L->n - 1].amostra = k->cor;
     }
@@ -2189,7 +2189,7 @@ static void tela_simulacao(const Config *cfg, const OpcoesUI *op, bool completo)
     z->tick_insp = -1;
     config_padrao(&z->extras);
     ui_caminho_svg(cfg, op, z->caminho_svg, sizeof z->caminho_svg);
-    sim_iniciar(&z->s, cfg, !completo, op->semente);
+    sim_iniciar(&z->s, cfg, !completo, op->semente, op->admissao);
     if (completo) {
         /* Simula tudo de uma vez, sem histórico, e já gera o SVG (req. 2.4). */
         const char *motivo = sim_rodar_ate_fim(&z->s);

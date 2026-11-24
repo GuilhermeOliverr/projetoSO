@@ -484,7 +484,7 @@ static void estatisticas(const Simulador *s) {
         tcb_ativacoes_txt(k, ativ, sizeof ativ);
         printf("  %*s%s %7s %7d %7d %7d %8.1f %8d %6d %7d ", folga(k->id, 6), "", k->id, ativ,
                k->deadlines_perdidos, k->ticks_exec, k->ticks_espera,
-               k->concluidas ? (double)k->resposta_soma / k->concluidas : 0.0, k->resposta_max,
+               k->concluidas > k->recusas ? (double)k->resposta_soma / (k->concluidas - k->recusas) : 0.0, k->resposta_max,
                k->preempcoes, k->sorteios);
         if (k->termino >= 0) printf("%7d\n", k->termino);
         else printf("%7s\n", "-");
@@ -515,6 +515,26 @@ static void estatisticas(const Simulador *s) {
     }
 }
 
+/* Decisões do teste de admissão (req. B 3), com o motivo de cada uma:
+ * recusa em vermelho, aceite sem garantia em amarelo. */
+static void admissoes(const Simulador *s) {
+    if (s->nadm == 0) return;
+    term_negrito();
+    printf("Teste de admissão:\n");
+    term_reset();
+    for (int i = 0; i < s->nadm; i++) {
+        const RegistroAdmissao *r = &s->adm[i];
+        const TCB *k = &s->atual.tarefas[r->tarefa];
+        printf("  t=%d %s", r->tick, k->id);
+        if (r->ativacao >= 0) printf(" (ativação %d)", r->ativacao + 1);
+        printf(": ");
+        if (r->resultado != ADM_ACEITA) term_fg(r->resultado == ADM_RECUSADA ? 0xE74C3C : 0xF1C40F);
+        printf("%s", admissao_nome(r->resultado));
+        term_reset();
+        printf(" (%s)\n", r->motivo);
+    }
+}
+
 static bool exportar(const Simulador *s, const Config *cfg, const char *caminho, char *msg, size_t tam) {
     char titulo[512], erro[512];
     titulo_svg(cfg, titulo, sizeof titulo);
@@ -537,7 +557,7 @@ int ui_execucao_completa(const Config *cfg, const OpcoesUI *op) {
         return 1;
     }
     Simulador s;
-    sim_iniciar(&s, cfg, false, op->semente);
+    sim_iniciar(&s, cfg, false, op->semente, op->admissao);
     const char *motivo = sim_rodar_ate_fim(&s);
     term_negrito();
     printf("\n=== Resultado da execução completa ===\n");
@@ -549,6 +569,7 @@ int ui_execucao_completa(const Config *cfg, const OpcoesUI *op) {
     gantt_tui_completo(&s);
     if (op->texto) gantt_texto(&s);
     estatisticas(&s);
+    admissoes(&s);
     char caminho[1024], msg[1400];
     ui_caminho_svg(cfg, op, caminho, sizeof caminho);
     bool ok = exportar(&s, cfg, caminho, msg, sizeof msg);
@@ -828,7 +849,7 @@ static void adicionar_tarefa(Simulador *s, Config *extras, char *msg, size_t tam
  * começa com "erro" aparece em vermelho, senão em verde. */
 void ui_passo_a_passo(const Config *cfg, const OpcoesUI *op) {
     Simulador s;
-    sim_iniciar(&s, cfg, true, op->semente);
+    sim_iniciar(&s, cfg, true, op->semente, op->admissao);
     Config extras;              /* tarefas criadas durante a simulação */
     config_padrao(&extras);
     char msg[1600] = "";

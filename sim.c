@@ -8,6 +8,7 @@
  * todos os trechos ficam juntos logo abaixo.
  */
 #include "sim.h"
+#include "admissao.h"
 #include "config.h"
 
 #include <limits.h>
@@ -70,6 +71,7 @@ const char *estado_nome(EstadoTarefa e) {
 /* Igual a estado_nome, mas quando a tarefa está suspensa acrescenta o
  * motivo. É o que o comando `t id` mostra. */
 const char *estado_descricao(const TCB *k) {
+    if (k->estado == T_TERMINADA && k->recusada) return "recusada (teste de admissão)";
     if (k->estado != T_SUSPENSA) return estado_nome(k->estado);
     switch (k->motivo) {
     case SUSP_PERIODO: return tcb_eh_atendida(k) ? "suspensa: próxima ocorrência" : "suspensa: próximo período";
@@ -144,10 +146,19 @@ int tcb_chegada(const TCB *k, int j) {
     return k->chegadas[j];
 }
 
+const char *admissao_nome(ResultadoAdmissao r) {
+    switch (r) {
+    case ADM_ACEITA: return "aceita";
+    case ADM_SEM_GARANTIA: return "aceita sem garantia";
+    default: return "recusada";
+    }
+}
+
 /* Coluna "ativ." das tabelas: concluídas/total. O servidor não tem
- * ativações próprias para contar. */
+ * ativações próprias para contar, e a tarefa recusada no ingresso não
+ * chegou a ter nenhuma. */
 void tcb_ativacoes_txt(const TCB *k, char *buf, size_t tam) {
-    if (tcb_eh_servidor(k)) snprintf(buf, tam, "-");
+    if (tcb_eh_servidor(k) || k->recusada) snprintf(buf, tam, "-");
     else snprintf(buf, tam, "%d/%d", k->concluidas, tcb_total_ativacoes(k));
 }
 
@@ -163,6 +174,7 @@ const char *evento_nome(TipoEvento t) {
     case EV_FIM_QUANTUM: return "fim de quantum";
     case EV_DESCARTE: return "capacidade descartada";
     case EV_RECARGA: return "recarga";
+    case EV_RECUSA: return "recusada pelo teste de admissão";
     default: return "?";
     }
 }
@@ -228,10 +240,11 @@ static void atualizar_fim(Estado *e) {
 
 //Inicializa a estrutura do simulador no tick 0, carrega o algoritmo de escalonamento, 
 //aloca a matriz do Gráfico de Gantt e salva o primeiro snapshot de memória.
-void sim_iniciar(Simulador *s, const Config *cfg, bool historico, uint64_t semente) {
+void sim_iniciar(Simulador *s, const Config *cfg, bool historico, uint64_t semente, bool admissao) {
     memset(s, 0, sizeof *s);
     s->historico = historico;
     Estado *e = &s->atual;
+    e->admissao = admissao;
     e->ncpus = cfg->ncpus;
     e->quantum = cfg->quantum;
     e->alg = cfg->algoritmo;
@@ -256,6 +269,7 @@ void sim_liberar(Simulador *s) {
     free(s->cpu);
     free(s->ncpus_col);
     free(s->ev);
+    free(s->adm);
     memset(s, 0, sizeof *s);
 }
 
@@ -280,6 +294,81 @@ static void iniciar_ativacao(TCB *k, int agora) {
 
 /* ------------------------------------------------------------- chegadas */
 
+/* Guarda uma decisão do teste de admissão, para as telas mostrarem o motivo. */
+static void registrar_admissao(Simulador *s, int tick, int tarefa, int ativacao, const Admissao *a) {
+    if (s->nadm == s->capadm) {
+        s->capadm = s->capadm ? s->capadm * 2 : 32;
+        s->adm = xrealloc(s->adm, (size_t)s->capadm * sizeof *s->adm);
+    }
+    RegistroAdmissao *r = &s->adm[s->nadm++];
+    r->tick = tick;
+    r->tarefa = tarefa;
+    r->ativacao = ativacao;
+    r->resultado = a->resultado;
+    snprintf(r->motivo, sizeof r->motivo, "%s", a->motivo);
+}
+
+/* Criação das tarefas (req. B 3): cada tarefa que ingressa agora passa
+ * pelo teste de admissão antes de entrar no sistema. Recusada, ela termina
+ * ali mesmo, sem executar. No mesmo instante, primeiro as periódicas e os
+ * servidores (a carga que os testes analisam), depois as esporádicas e por
+ * fim as aperiódicas, que dependem dos servidores; dentro de cada grupo, na
+ * ordem do arquivo: quem pede para entrar depois é quem fica de fora. */
+static void admitir_novas(Simulador *s, int t) {
+    Estado *e = &s->atual;
+    for (int fase = 0; fase < 3; fase++)
+        for (int i = 0; i < e->n; i++) {
+            TCB *k = &e->tarefas[i];
+            if (k->admitida || k->estado == T_TERMINADA || t < k->ingresso) continue;
+            int f = k->tipo == TIPO_ESPORADICA ? 1 : k->tipo == TIPO_APERIODICA ? 2 : 0;
+            if (f != fase) continue;
+            Admissao a = admissao_tarefa(e, i);
+            if (e->admissao || a.resultado == ADM_RECUSADA) registrar_admissao(s, t, i, -1, &a);
+            if (a.resultado != ADM_RECUSADA) {
+                k->admitida = true;
+                continue;
+            }
+            k->estado = T_TERMINADA;
+            k->recusada = true;
+            k->motivo = SUSP_NENHUM;
+            k->termino = t;
+            evento_add(s, t, t, EV_RECUSA, i, 0, -1);
+        }
+}
+
+/* Começa a próxima ativação pendente no instante `agora` (no passo 1, na
+ * chegada; no passo 4, logo depois de a anterior acabar). Numa aperiódica
+ * com prazo, a ativação é uma tarefa nova criada durante a execução e passa
+ * pelo teste de admissão ao entrar na fila (req. B 3). Recusada, ela conta
+ * como concluída sem executar, e a próxima pendente (se houver) é testada no
+ * lugar. No fim, ou há uma ativação em andamento (restante > 0) e quem chama
+ * a põe na fila, ou a tarefa ficou esperando a próxima ocorrência, ou
+ * terminou. */
+static void comecar_ativacao(Simulador *s, int i, int tick, int agora) {
+    Estado *e = &s->atual;
+    TCB *k = &e->tarefas[i];
+    while (k->liberadas > k->concluidas) {
+        iniciar_ativacao(k, agora);
+        if (!e->admissao || k->tipo != TIPO_APERIODICA || k->prazo <= 0) return;
+        Admissao a = admissao_ativacao(e, i, agora);
+        registrar_admissao(s, tick, i, k->concluidas, &a);
+        if (a.resultado != ADM_RECUSADA) return;
+        evento_add(s, tick, agora, EV_RECUSA, i, k->concluidas, -1);
+        k->restante = 0;
+        k->concluidas++;
+        k->recusas++;
+    }
+    if (k->concluidas >= tcb_total_ativacoes(k)) {
+        k->estado = T_TERMINADA;
+        k->termino = agora;
+        k->cpu = -1;
+        evento_add(s, tick, agora, EV_TERMINO, i, k->concluidas - 1, -1);
+    } else if (!suspensa_pelo_usuario(k)) {
+        k->estado = T_SUSPENSA;
+        k->motivo = SUSP_PERIODO;
+    }
+}
+
 /* Libera a próxima ativação da tarefa i no instante t (passo 1 do tick). */
 static void liberar_ativacao(Simulador *s, int i, int t) {
     TCB *k = &s->atual.tarefas[i];
@@ -298,11 +387,11 @@ static void liberar_ativacao(Simulador *s, int i, int t) {
     /* Se a ativação anterior ainda não terminou, esta fica acumulada e
      * começa assim que a anterior acabar */
     if (k->restante == 0) {
-        iniciar_ativacao(k, t);
+        comecar_ativacao(s, i, t, t);
         /* Suspensa pelo usuário continua suspensa (a ativação fica
          * esperando a retomada); a espera pelo período acabou. Uma
          * aperiódica pronta é uma aperiódica na fila dos servidores. */
-        if (!suspensa_pelo_usuario(k)) {
+        if (k->restante > 0 && !suspensa_pelo_usuario(k)) {
             k->estado = T_PRONTA;
             k->motivo = SUSP_NENHUM;
         }
@@ -784,16 +873,18 @@ static bool executar_tick(Simulador *s) {
     int t = e->t;
     Estado antes = {0};
     estado_copiar(&antes, e);
-    int nev_antes = s->nev, ncols_antes = s->ncols;
+    int nev_antes = s->nev, ncols_antes = s->ncols, nadm_antes = s->nadm;
     /* Garante que o rastro do Gantt tem espaço para este tick e para todas
      * as tarefas (uma tarefa pode ter sido adicionada pelo usuário). */
     rastro_ajustar_largura(s, e->n);
     rastro_garantir_coluna(s, t);
 
-    /* 1. Chegadas. Usamos >= (e não ==) para que uma edição de ingresso ou
+    /* 1. Criação e chegadas. Quem ingressa agora passa antes pelo teste de
+     * admissão (admitir_novas). Usamos >= (e não ==) para que uma edição de ingresso ou
      * período que "pule" o instante exato não perca a ativação. A periódica
      * libera no máximo uma por tick; a aperiódica pode ter duas ocorrências
      * no mesmo instante, e libera todas as que já venceram. */
+    admitir_novas(s, t);
     for (int i = 0; i < e->n; i++) {
         TCB *k = &e->tarefas[i];
         if (k->estado == T_TERMINADA) continue;
@@ -812,8 +903,9 @@ static bool executar_tick(Simulador *s) {
     if (!escalonar(s)) {
         estado_copiar(e, &antes);   /* desfaz as chegadas deste tick */
         estado_liberar(&antes);
-        s->nev = nev_antes;         /* e os eventos e a coluna do Gantt */
+        s->nev = nev_antes;         /* e os eventos, a coluna do Gantt */
         s->ncols = ncols_antes;
+        s->nadm = nadm_antes;       /* e as decisões de admissão */
         return false;
     }
     estado_liberar(&antes);
@@ -899,8 +991,8 @@ static bool executar_tick(Simulador *s) {
             } else if (k->liberadas > k->concluidas) {
                 /* Próxima ativação já estava acumulada. Mantemos `cpu` para
                  * que ela conte como "estava executando". */
-                iniciar_ativacao(k, t + 1);
-                k->estado = T_PRONTA;
+                comecar_ativacao(s, i, t, t + 1);
+                if (k->restante > 0) k->estado = T_PRONTA;
             } else {
                 /* Nada pendente: espera o próximo período. */
                 k->estado = T_SUSPENSA;
@@ -1213,6 +1305,11 @@ void hist_truncar(Simulador *s, int t) {
     for (int i = 0; i < s->nev; i++)
         if (s->ev[i].tick < t) s->ev[j++] = s->ev[i];
     s->nev = j;
+    /* As decisões de admissão seguem a mesma regra dos eventos. */
+    j = 0;
+    for (int i = 0; i < s->nadm; i++)
+        if (s->adm[i].tick < t) s->adm[j++] = s->adm[i];
+    s->nadm = j;
 }
 
 //Restaura o estado da simulação (s->atual) a partir do snapshot gravado no instante 't' (operação de Undo/Ir para).
@@ -1359,6 +1456,8 @@ void edicao_prazo(TCB *k, int v) {
 void edicao_ingresso(TCB *k, int v) {
     k->ingresso = v;
     k->proxima_chegada = v;
+    if (tcb_eh_atendida(k) && k->nocorrencias > 0) k->proxima_chegada = v + k->ocorrencias[0];
+    k->admitida = false;   /* a tarefa é criada no ingresso novo e passa pelo teste lá */
 }
 
 //Alterna a tarefa 'k' entre o estado suspenso manualmente pelo usuário (SUSP_USUARIO) e o seu estado normal de execução/espera. 

@@ -49,15 +49,18 @@ for f in tests/nao_existe.txt tests; do
     fi
 done
 
-# Executa em modo completo e devolve a saída em texto.
-roda() { $BIN "$1" --modo completo --texto --sem-cor --saida "$TMP/g.svg" ${2:+"$@"} 2>&1; }
+# Executa em modo completo e devolve a saída em texto. Opções extras vão depois do arquivo.
+roda() { arq=$1; shift; $BIN "$arq" --modo completo --texto --sem-cor --saida "$TMP/g.svg" "$@" 2>&1; }
 
 echo "== Avisos"
-# Sem nenhum servidor no arquivo, a aperiódica nunca executaria (req. B 1.1).
+# Sem nenhum servidor no arquivo, a aperiódica nunca executaria (req. B 1.1):
+# o teste de admissão a recusa no ingresso, mesmo com --sem-admissao.
 roda tests/validos/08_com_aperiodica.txt > "$TMP/out"
-grep -q 'aperiódica (periodo = 0) e foi ignorada: não há nenhum servidor' "$TMP/out" && ok "aperiódica sem servidor ignorada com aviso" \
-    || falha "aperiódica sem servidor ignorada com aviso"
-grep -q 'T2' "$TMP/out" && falha "aperiódica sem servidor não deveria aparecer no Gantt" || ok "aperiódica sem servidor fora do Gantt"
+grep -q 't=0 2: recusada (não há servidor' "$TMP/out" && ok "aperiódica sem servidor recusada com o motivo" \
+    || falha "aperiódica sem servidor recusada com o motivo"
+roda tests/validos/08_com_aperiodica.txt --sem-admissao > "$TMP/out"
+grep -q 't=0 T2 recusada pelo teste de admissão' "$TMP/out" && ok "aperiódica sem servidor recusada mesmo com --sem-admissao" \
+    || falha "aperiódica sem servidor recusada mesmo com --sem-admissao"
 
 echo "== Figura 2.5 (tabela 2.1 com RM)"
 roda exemplos/fig2_5_rm.txt > "$TMP/out"
@@ -67,7 +70,9 @@ grep -q 'CPU0: \[0,20)T1 \[20,60)T2 \[60,100)T3 \[100,120)T1 \[120,150)T3 \[150,
 [ "$(grep -c '10/10' "$TMP/out")" -eq 3 ] && ok "cada tarefa termina após 10 ativações" || falha "10 ativações"
 
 echo "== Figura 2.6 (U = 100%)"
-roda exemplos/fig2_6_rm.txt > "$TMP/out"
+# Com RM, U = 100% não passa no teste de admissão (B seria recusada); para
+# ver a perda de prazo da figura, o teste fica desligado.
+roda exemplos/fig2_6_rm.txt --sem-admissao > "$TMP/out"
 grep -q 't=50 T2 perda de prazo' "$TMP/out" && ok "RM: B perde o prazo em t = 50" || falha "RM: B perde o prazo em t = 50"
 roda exemplos/fig2_6_edf.txt > "$TMP/out"
 grep -q 't=[0-9]* T[0-9]* perda de prazo' "$TMP/out" && falha "EDF não deveria perder prazo" || ok "EDF: nenhum prazo perdido"
@@ -78,7 +83,7 @@ echo "== Perda de prazo de ativação acumulada (sobrecarga)"
 # T2 recebe só 1 de cada 4 ticks e acumula ativações. A 4ª chega em 24 e
 # vence em 32 sem nem ter começado: a perda tem que aparecer em t = 32 (o
 # deadline), e não quando a ativação finalmente começa a executar.
-roda tests/validos/18_ativacoes_acumuladas.txt > "$TMP/out"
+roda tests/validos/18_ativacoes_acumuladas.txt --sem-admissao > "$TMP/out"
 grep -q 't=32 T2 perda de prazo (ativação 4)' "$TMP/out" && grep -q 't=40 T2 perda de prazo (ativação 5)' "$TMP/out" \
     && ok "perda marcada no instante exato do deadline (t = 32 e t = 40)" \
     || falha "perda de ativação acumulada" "$(grep 'perda de prazo' "$TMP/out" | tr '\n' ' ')"
@@ -91,7 +96,7 @@ grep -q 'sorteio' "$TMP/out" && ok "sorteio registrado (critério 5)" || falha "
 roda exemplos/quantum_empate_total.txt > "$TMP/out"
 grep -q 'CPU0: \[0,6)T. \[6,12)T.' "$TMP/out" \
     && ok "fim de quantum não tira a tarefa da CPU (critério 1)" || falha "quantum x critério 1"
-roda exemplos/quantum_respeita_prazo.txt > "$TMP/out"
+roda exemplos/quantum_respeita_prazo.txt --sem-admissao > "$TMP/out"
 grep -q 'CPU0: \[0,4)T1 \[4,8)T2' "$TMP/out" && grep -q 'Nenhum prazo perdido' "$TMP/out" \
     && ok "fim de quantum não passa por cima do critério 2 (prazo)" || falha "quantum x critério 2"
 
@@ -101,7 +106,7 @@ echo "== Desempate: critério 2 usa o prazo relativo"
 # critério 2 compara o prazo relativo (campo 'prazo', ver README "Desempate"):
 # 10 < 20, então T2 vem primeiro. Pelo deadline absoluto empataria e o
 # critério 3 (ingresso) daria T1.
-roda tests/validos/20_desempate_prazo_absoluto.txt > "$TMP/out"
+roda tests/validos/20_desempate_prazo_absoluto.txt --sem-admissao > "$TMP/out"
 grep -q 'CPU0: \[0,12)T3 \[12,15)T2 \[15,18)T1' "$TMP/out" \
     && ok "mesmo deadline absoluto: o critério 2 (menor prazo relativo) escolhe T2" \
     || falha "critério 2 (prazo relativo)" "$(grep 'CPU0:' "$TMP/out" | head -1 | cut -c1-100)"
@@ -126,10 +131,10 @@ printf 'g 60\nx %s/ida.svg\ng 150\np 50\np 40\nx %s/volta.svg\nq\n' "$TMP" "$TMP
     | $BIN exemplos/fig2_5_rm.txt --modo passo --sem-cor > "$TMP/out" 2>&1
 cmp -s "$TMP/ida.svg" "$TMP/volta.svg" && ok "voltar para t = 60 reproduz exatamente o mesmo Gantt" \
     || falha "retroceder deveria reproduzir o estado"
-printf 'g 30\ne 1\n6\n0\n5\nq\n' | $BIN exemplos/fig2_6_rm.txt --modo passo --sem-cor > "$TMP/out" 2>&1
+printf 'g 30\ne 1\n6\n0\n5\nq\n' | $BIN exemplos/fig2_6_rm.txt --modo passo --sem-cor --sem-admissao > "$TMP/out" 2>&1
 grep -q 'não tem ativação em andamento' "$TMP/out" && ok "edição inválida recusada com motivo" \
     || falha "edição inválida deveria ser recusada"
-printf 'g 25\ne 2\n7\nn 10\nt 2\nq\n' | $BIN exemplos/fig2_6_rm.txt --modo passo --sem-cor > "$TMP/out" 2>&1
+printf 'g 25\ne 2\n7\nn 10\nt 2\nq\n' | $BIN exemplos/fig2_6_rm.txt --modo passo --sem-cor --sem-admissao > "$TMP/out" 2>&1
 grep -q 'suspensa 10 tick' "$TMP/out" && grep -q '░' "$TMP/out" && ok "suspensão aparece no estado e no Gantt" \
     || falha "suspensão"
 

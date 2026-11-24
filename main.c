@@ -35,6 +35,8 @@ static void uso(const char *prog) {
            "  --texto                no modo completo, imprime também a linha do tempo em texto\n"
            "  --validar              só carrega e valida o arquivo (código de saída 0 = válido)\n"
            "  --semente N            semente do sorteio de desempate (padrão: 1; 0 = relógio)\n"
+           "  --sem-admissao         não faz o teste de escalonabilidade ao criar cada tarefa (toda\n"
+           "                         tarefa entra; a aperiódica sem nenhum servidor continua recusada)\n"
            "  --plugin ARQ           carrega um escalonador: ARQ.txt (fórmula da prioridade, ex.:\n"
            "                         'nome: LLF' e 'prioridade: deadline_abs - agora - restante')\n"
            "                         ou ARQ.so/ARQ.dylib (plugin compilado); pode repetir\n"
@@ -71,8 +73,8 @@ int main(int argc, char **argv) {
     const char *modo = NULL;      /* "passo"/"a" ou "completo"/"b"            */
     bool validar = false;         /* --validar: só confere o arquivo e sai    */
     bool terminal = false;        /* --terminal: não abre a janela gráfica    */
-    /* OpcoesUI = {arquivo do SVG, mostrar texto no modo completo, semente} */
-    OpcoesUI op = {NULL, false, 1};
+    /* OpcoesUI = {arquivo do SVG, mostrar texto no modo completo, semente, teste de admissão} */
+    OpcoesUI op = {NULL, false, 1, true};
 
 #ifndef _WIN32
     /* Cores só quando a saída é um terminal de verdade (isatty). Se a saída
@@ -95,6 +97,8 @@ int main(int argc, char **argv) {
             terminal = true;
         } else if (!strcmp(a, "--texto")) {
             op.texto = true;
+        } else if (!strcmp(a, "--sem-admissao")) {
+            op.admissao = false;
         } else if (!strcmp(a, "--validar")) {
             validar = true;
         } else if (!strcmp(a, "--modo") && tem_valor) {
