@@ -27,7 +27,7 @@
 #endif
 
 static void uso(const char *prog) {
-    printf("Simulador de escalonamento de tempo real (RM / EDF) - Projeto A\n\n"
+    printf("Simulador de escalonamento de tempo real (RM / EDF) - Projeto B\n\n"
            "Uso: %s [arquivo_config] [opções]\n\n"
            "Opções:\n"
            "  --modo passo|completo  modo de execução, sem perguntar (a = passo, b = completo)\n"
@@ -173,7 +173,7 @@ int main(int argc, char **argv) {
             fprintf(stderr, "erro: --validar precisa do caminho do arquivo\n");
             return 2;
         }
-        printf("Simulador de escalonamento de tempo real (RM / EDF) - Projeto A\n");
+        printf("Simulador de escalonamento de tempo real (RM / EDF) - Projeto B\n");
         if (!ui_pedir_arquivo(&cfg)) return 0;
     }
 

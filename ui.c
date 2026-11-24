@@ -252,7 +252,7 @@ static bool pedir_tarefa(TarefaCfg *t, const CtxIds *ids, int min_ingresso, char
  *   EDF: com prazo = período, escalona em 1 CPU se e somente se U <= 1.
  * É só uma informação para o usuário; não afeta a simulação. */
 static void imprimir_utilizacao(int n, double u, int alg) {
-    printf("Utilização U = Σ C/P = %.3f", u);
+    printf("Utilização U = Σ C/P (periódicas e servidores) = %.3f", u);
     const Escalonador *e = sched_obter(alg);
     if (e && str_ieq(e->nome, "RM")) {
         double lim = sim_limite_rm(n);
@@ -279,12 +279,13 @@ void ui_imprimir_config(const Config *cfg) {
     term_negrito();
     printf("Tarefas (%d):\n", cfg->n);
     term_reset();
-    printf("  %6s  %-7s %8s %8s %8s %8s  %s\n", "id", "cor", "ingresso", "duração", "período", "prazo", "eventos");
+    printf("  %6s  %-11s %-7s %8s %8s %8s %8s  %s\n", "id", "tipo", "cor", "ingresso", "duração", "período", "prazo", "eventos");
     double u = 0;
     int nu = 0;   /* quantas entram na utilização (o n do limite do RM) */
     for (int i = 0; i < cfg->n; i++) {
         const TarefaCfg *t = &cfg->tarefas[i];
-        printf("  %*s%s  ", folga(t->id, 6), "", t->id);
+        const char *tipo = tipo_nome_de(t->tipo, t->servidor);
+        printf("  %*s%s  %s%*s ", folga(t->id, 6), "", t->id, tipo, folga(tipo, 11), "");
         term_bg(t->cor);
         printf("  ");
         term_reset();
@@ -297,6 +298,8 @@ void ui_imprimir_config(const Config *cfg) {
         }
     }
     imprimir_utilizacao(nu, u, cfg->algoritmo);
+    printf("(servidor: duração = capacidade; aperiódica: período 0; esporádica: |período| = intervalo mínimo e "
+           "eventos = instantes de chegada)\n");
 }
 
 /* Posição da tarefa de id `id` na configuração: devolve o ÍNDICE (-1 se
@@ -581,6 +584,52 @@ int ui_execucao_completa(const Config *cfg, const OpcoesUI *op) {
 
 /* ---------------------------------------------------- modo passo a passo */
 
+/* Parte do `t id` que depende do tipo (Projeto B): o que o servidor tem de
+ * capacidade e quem ele executa; quando a aperiódica chega e onde ela está
+ * (na fila ou com qual servidor); e o que o teste de admissão decidiu. */
+static void detalhes_tipo(const Simulador *s, int i) {
+    const Estado *e = &s->atual;
+    const TCB *k = &e->tarefas[i];
+    printf("  tipo: %s", tipo_nome(k));
+    if (k->tipo == TIPO_ESPORADICA) printf(" (intervalo mínimo entre ocorrências: %d)", -k->periodo);
+    if (k->tipo == TIPO_APERIODICA && k->prazo <= 0) printf(" (sem prazo)");
+    if (tcb_eh_servidor(k) && k->servidor != SERV_BS) printf(" (capacidade %d a cada %d tick(s))", k->duracao, k->periodo);
+    putchar('\n');
+    if (tcb_eh_servidor(k)) {
+        if (k->servidor != SERV_BS) printf("  capacidade restante: %d de %d\n", k->capacidade, k->duracao);
+        printf("  executando a aperiódica: %s\n", k->atendendo >= 0 ? e->tarefas[k->atendendo].id : "nenhuma");
+        if (k->servidor == SERV_SS) {
+            if (k->ss_ativo_desde >= 0)
+                printf("  ativo desde o instante %d (gastou %d; volta no instante %d)\n", k->ss_ativo_desde,
+                       k->ss_consumo, k->ss_ativo_desde + k->periodo);
+            printf("  recargas agendadas: %s", k->nrecargas ? "" : "nenhuma");
+            for (int j = 0; j < k->nrecargas; j++)
+                printf("%s+%d no instante %d", j ? ", " : "", k->recargas[j].quantidade, k->recargas[j].instante);
+            putchar('\n');
+        }
+    }
+    if (tcb_eh_atendida(k)) {
+        printf("  ocorrências (relativas ao ingresso %d):", k->ingresso);
+        for (int j = 0; j < k->nocorrencias && j < 20; j++) printf(" %d", k->ocorrencias[j]);
+        if (k->nocorrencias > 20) printf(" ... (%d ao todo)", k->nocorrencias);
+        putchar('\n');
+        if (k->restante > 0 && k->atendida_por >= 0) {
+            printf("  com o servidor %s\n", e->tarefas[k->atendida_por].id);
+        } else if (k->restante > 0 && (k->estado == T_PRONTA || k->estado == T_EXECUTANDO)) {
+            int *fila = xmalloc((size_t)(e->n ? e->n : 1) * sizeof *fila);
+            int nf = sim_fila_aperiodicas(e, fila), pos = 0;
+            for (int j = 0; j < nf; j++)
+                if (fila[j] == i) pos = j + 1;
+            free(fila);
+            printf("  na fila de aperiódicas: posição %d de %d\n", pos, nf);
+        }
+        if (k->recusas) printf("  ativações recusadas pelo teste de admissão: %d\n", k->recusas);
+    }
+    const RegistroAdmissao *r = sim_admissao_tarefa(s, i);
+    if (r) printf("  teste de admissão (instante %d): %s (%s)\n", r->tick, admissao_nome(r->resultado), r->motivo);
+    else if (!k->admitida && k->estado != T_TERMINADA) printf("  teste de admissão: no ingresso (instante %d)\n", k->ingresso);
+}
+
 /* Comando `t id`: despeja o TCB de uma tarefa (req. 1.5.1: examinar o
  * estado de cada tarefa individualmente, como num debugger). */
 static void detalhes_tarefa(const Simulador *s, int i) {
@@ -591,17 +640,23 @@ static void detalhes_tarefa(const Simulador *s, int i) {
     term_reset();
     printf("  parâmetros: cor %06X | ingresso %d | duração %d | período %d | prazo %d\n",
            k->cor, k->ingresso, k->duracao, k->periodo, k->prazo);
-    printf("  eventos: %d", k->neventos);
-    for (int j = 0; j < k->neventos; j++) printf("%s%s", j ? " | " : ": ", k->eventos[j]);
-    putchar('\n');
+    detalhes_tipo(s, i);
+    if (!tcb_eh_atendida(k)) {
+        printf("  eventos: %d", k->neventos);
+        for (int j = 0; j < k->neventos; j++) printf("%s%s", j ? " | " : ": ", k->eventos[j]);
+        putchar('\n');
+    }
     printf("  estado: %s\n", estado_descricao(k));
-    if (k->restante > 0)
+    if ((k->restante > 0 && !tcb_eh_atendida(k)) ||
+        (tcb_eh_servidor(k) && (k->estado == T_PRONTA || k->estado == T_EXECUTANDO)))
         printf("  prioridade (menor = mais prioritária): nominal %d, ativa %d\n", k->prio_nominal, k->prio_ativa);
     if (!tcb_eh_servidor(k))
         printf("  ativações: %d chegaram, %d concluídas (de %d)\n", k->liberadas, k->concluidas, tcb_total_ativacoes(k));
     if (k->restante > 0) {
-        printf("  ativação atual: nº %d, chegou em %d, deadline em %d, faltam %d tick(s)%s\n",
-               k->concluidas + 1, k->chegada_atual, k->deadline_abs, k->restante,
+        char dl[32] = "sem prazo";
+        if (k->prazo > 0) snprintf(dl, sizeof dl, "deadline em %d", k->deadline_abs);
+        printf("  ativação atual: nº %d, chegou em %d, %s, faltam %d tick(s)%s\n",
+               k->concluidas + 1, k->chegada_atual, dl, k->restante,
                ativacao_atual_perdeu_prazo(k) ? " — PRAZO PERDIDO" : "");
         if (k->liberadas - k->concluidas > 1)
             printf("  ativações acumuladas esperando: %d\n", k->liberadas - k->concluidas - 1);
@@ -616,6 +671,31 @@ static void detalhes_tarefa(const Simulador *s, int i) {
     if (k->termino >= 0) printf("  terminou no instante %d\n", k->termino);
 }
 
+/* A fila de aperiódicas, na ordem de atendimento (esporádicas primeiro), e
+ * quem está com cada servidor. Só aparece se há aperiódica ou servidor. */
+static void imprimir_fila(const Estado *e) {
+    bool tem = false;
+    for (int i = 0; i < e->n; i++)
+        if (tcb_eh_servidor(&e->tarefas[i]) || tcb_eh_atendida(&e->tarefas[i])) tem = true;
+    if (!tem) return;
+    int *fila = xmalloc((size_t)(e->n ? e->n : 1) * sizeof *fila);
+    int nf = sim_fila_aperiodicas(e, fila);
+    printf("  fila de aperiódicas:");
+    for (int j = 0; j < nf; j++)
+        printf(" %s (%s, chegou em %d)", e->tarefas[fila[j]].id, tipo_curto(&e->tarefas[fila[j]]),
+               e->tarefas[fila[j]].chegada_atual);
+    printf("%s\n", nf ? "" : " vazia");
+    free(fila);
+    bool algum = false;
+    for (int i = 0; i < e->n; i++) {
+        const TCB *k = &e->tarefas[i];
+        if (!tcb_eh_servidor(k) || k->atendendo < 0) continue;
+        printf("%s %s -> %s", algum ? "," : "  com servidor:", k->id, e->tarefas[k->atendendo].id);
+        algum = true;
+    }
+    if (algum) putchar('\n');
+}
+
 /* Comando `s`: visão geral do sistema (todas as tarefas numa tabela). */
 static void estado_sistema(const Simulador *s) {
     const Estado *e = &s->atual;
@@ -623,25 +703,37 @@ static void estado_sistema(const Simulador *s) {
     term_negrito();
     printf("Sistema no instante %d\n", e->t);
     term_reset();
-    printf("  algoritmo %s | quantum %d | %d CPU(s) | %s\n", esc->nome, e->quantum, e->ncpus,
+    printf("  algoritmo %s | quantum %d | %d CPU(s) | teste de admissão %s | %s\n", esc->nome, e->quantum,
+           e->ncpus, e->admissao ? "ligado" : "desligado",
            e->fim ? "simulação concluída" : sim_bloqueado(e) ? "bloqueada (todas suspensas)" : "em andamento");
     int nu;
     double u = sim_utilizacao(e, &nu);
     imprimir_utilizacao(nu, u, e->alg);
-    printf("\n  %6s %-27s %7s %8s %8s %5s %7s\n", "id", "estado", "ativ.", "restante", "deadline", "CPU", "prazos");
+    printf("\n  %6s %-5s %-34s %7s %8s %8s %5s %7s\n", "id", "tipo", "estado", "ativ.", "restante", "deadline", "CPU",
+           "prazos");
     int *ordem = gantt_ordem(e);
     for (int r = e->n - 1; r >= 0; r--) {
         const TCB *k = &e->tarefas[ordem[r]];
-        char ativ[32];
+        char ativ[32], rest[16] = "-", dl[16] = "-";
         tcb_ativacoes_txt(k, ativ, sizeof ativ);
-        printf("  %*s%s %-27s %7s ", folga(k->id, 6), "", k->id, estado_descricao(k), ativ);
-        if (k->restante > 0) printf("%8d %8d ", k->restante, k->deadline_abs);
-        else printf("%8s %8s ", "-", "-");
-        if (k->cpu >= 0) printf("%5d ", k->cpu);
+        /* "restante" do servidor é a capacidade que ainda tem */
+        if (tcb_eh_servidor(k) && k->servidor != SERV_BS) snprintf(rest, sizeof rest, "cap %d", k->capacidade);
+        if (k->restante > 0) snprintf(rest, sizeof rest, "%d", k->restante);
+        if (k->restante > 0 && k->prazo > 0) snprintf(dl, sizeof dl, "%d", k->deadline_abs);
+        const char *est = estado_descricao(k);
+        printf("  %*s%s %-5s %s%*s %7s %8s %8s ", folga(k->id, 6), "", k->id, tipo_curto(k), est, folga(est, 34), "", ativ,
+               rest, dl);
+        if (k->cpu >= 0 && k->estado == T_EXECUTANDO) printf("%5d ", k->cpu);
         else printf("%5s ", "-");
         printf("%7d\n", k->deadlines_perdidos);
     }
     free(ordem);
+    imprimir_fila(e);
+    int cont[3] = {0, 0, 0};
+    for (int i = 0; i < s->nadm; i++) cont[s->adm[i].resultado]++;
+    if (s->nadm)
+        printf("  teste de admissão até agora: %d aceita(s), %d sem garantia, %d recusada(s) "
+               "(d mostra os motivos)\n", cont[ADM_ACEITA], cont[ADM_SEM_GARANTIA], cont[ADM_RECUSADA]);
 }
 
 /* Linha com a situação das CPUs e da fila no último tick executado. */
@@ -657,25 +749,39 @@ static void resumo_tick(const Simulador *s) {
     char rot[ID_MAX + 8];
     printf("Tick %d:", t);
     for (int c = 0; c < s->ncpus_col[t]; c++) {
-        int quem = -1;
-        for (int i = 0; i < e->n; i++)
-            if (sim_cpu_celula(s, t, i) == c) quem = i;
+        int aper, quem = gantt_quem_na_cpu(s, t, c, &aper);   /* servidor: "PS1:A1" */
         if (quem >= 0) {
             id_rotulo(e->tarefas[quem].id, todos_inteiros, rot, sizeof rot);
             printf("  CPU%d=%s", c, rot);
+            if (aper >= 0) {
+                id_rotulo(e->tarefas[aper].id, todos_inteiros, rot, sizeof rot);
+                printf(":%s", rot);
+            }
         } else {
             printf("  CPU%d=desligada", c);
         }
     }
     printf("  | prontas:");
-    int np = 0;
+    int np = 0, na = 0;
     for (int i = 0; i < e->n; i++)
         if (sim_celula(s, t, i) == G_PRONTA) {
+            if (tcb_eh_atendida(&e->tarefas[i])) {   /* aperiódica esperando: vai na lista abaixo */
+                na++;
+                continue;
+            }
             id_rotulo(e->tarefas[i].id, todos_inteiros, rot, sizeof rot);
             printf(" %s", rot);
             np++;
         }
     if (!np) printf(" (nenhuma)");
+    if (na) {
+        printf("  | aperiódicas esperando:");
+        for (int i = 0; i < e->n; i++)
+            if (sim_celula(s, t, i) == G_PRONTA && tcb_eh_atendida(&e->tarefas[i])) {
+                id_rotulo(e->tarefas[i].id, todos_inteiros, rot, sizeof rot);
+                printf(" %s", rot);
+            }
+    }
     putchar('\n');
     bool algum = false;
     for (int v = 0; v < s->nev; v++) {
@@ -699,6 +805,7 @@ static void ajuda_passo(void) {
            "  a     troca o algoritmo   k  quantum   c  quantidade de CPUs\n"
            "  v t   fixa a janela do Gantt a partir de t      v      volta a seguir o relógio\n"
            "  f     Gantt completo      x [arquivo]  exporta SVG      h  ajuda      q  sair\n"
+           "  d     decisões do teste de admissão (aceita, sem garantia ou recusada, com o motivo)\n"
            "Editar num instante passado descarta o que já tinha sido simulado depois dele.\n");
 }
 
@@ -968,6 +1075,13 @@ void ui_passo_a_passo(const Config *cfg, const OpcoesUI *op) {
             break;
         }
         case 's': term_limpar(); estado_sistema(&s); pausar(); break;
+        case 'd':
+            term_limpar();
+            if (s.nadm) admissoes(&s);
+            else printf("Nenhuma tarefa passou pelo teste de admissão até o instante %d%s.\n", s.atual.t,
+                        s.atual.admissao ? "" : " (o teste está desligado: --sem-admissao)");
+            pausar();
+            break;
         case 't': case 'e': {
             if (!*resto) { fmsg(msg, sizeof msg, "erro: informe o id da tarefa, ex.: %c 1", cmd); break; }
             int i = sim_indice(&s.atual, resto);   /* índice, -1 = não existe */

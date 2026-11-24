@@ -130,6 +130,9 @@ void tcb_iniciar(TCB *k, const TarefaCfg *t);    // Inicializa a estrutura TCB '
 CelulaGantt sim_celula(const Simulador *s, int tick, int tarefa);    // Consulta e retorna o estado visual da célula (Vazio, Pronta, Executando, Suspensa) no Gantt
 int sim_cpu_celula(const Simulador *s, int tick, int tarefa);    // Consulta e retorna o índice da CPU em que a 'tarefa' executou no 'tick' (-1 se nenhuma)
 
+int sim_fila_aperiodicas(const Estado *e, int *ordem);    // A fila de aperiódicas/esporádicas sem servidor, na ordem em que serão atendidas; os índices vão para 'ordem' (tamanho e->n) e devolve quantas
+const RegistroAdmissao *sim_admissao_tarefa(const Simulador *s, int tarefa);    // A decisão do teste de admissão sobre a tarefa no ingresso (NULL se ainda não houve)
+
 int sim_indice(const Estado *e, const char *id);    // Busca o índice da tarefa no vetor de TCBs a partir do seu 'id' (id_iguais); retorna o ÍNDICE, ou -1 se não encontrar
 
 bool sim_ids_inteiros(const Estado *e);    // true se todos os ids do estado atual são inteiros (rótulos "T<id>"; ver id_rotulo)

@@ -104,11 +104,25 @@ bool tcb_eh_atendida(const TCB *k) {
 }
 
 const char *tipo_nome(const TCB *k) {
+    return tipo_nome_de(k->tipo, k->servidor);
+}
+
+const char *tipo_curto(const TCB *k) {
+    static const char *const servidores[] = {"BS", "PS", "DS", "SS"};
     switch (k->tipo) {
+    case TIPO_APERIODICA: return "aper.";
+    case TIPO_ESPORADICA: return "esp.";
+    case TIPO_SERVIDOR: return (int)k->servidor < 4 ? servidores[k->servidor] : "serv.";
+    default: return "per.";
+    }
+}
+
+const char *tipo_nome_de(TipoTarefa tipo, TipoServidor servidor) {
+    switch (tipo) {
     case TIPO_APERIODICA: return "aperiódica";
     case TIPO_ESPORADICA: return "esporádica";
     case TIPO_SERVIDOR:
-        switch (k->servidor) {
+        switch (servidor) {
         case SERV_BS: return "servidor BS";
         case SERV_PS: return "servidor PS";
         case SERV_DS: return "servidor DS";
@@ -510,6 +524,22 @@ static bool vem_antes(const Estado *e, int a, int b) {
     if (ex != ey) return ex;
     if (x->chegada_atual != y->chegada_atual) return x->chegada_atual < y->chegada_atual;
     return a < b;
+}
+
+/* A fila inteira, na ordem de atendimento (inserção ordenada por vem_antes).
+ * É o que as telas mostram como "fila de aperiódicas". */
+int sim_fila_aperiodicas(const Estado *e, int *ordem) {
+    int n = 0;
+    for (int i = 0; i < e->n; i++) {
+        if (!na_fila(&e->tarefas[i])) continue;
+        int p = n++;
+        while (p > 0 && vem_antes(e, i, ordem[p - 1])) {
+            ordem[p] = ordem[p - 1];
+            p--;
+        }
+        ordem[p] = i;
+    }
+    return n;
 }
 
 /* A primeira da fila (ver vem_antes); -1 se a fila está vazia. */
@@ -1166,6 +1196,14 @@ void sim_adicionar_tarefa(Simulador *s, const TarefaCfg *t) {
 }
 
 /* --------------------------------------------------------------- consultas */
+
+/* A última decisão sobre a tarefa inteira (no ingresso). Editar o ingresso
+ * faz o teste rodar de novo; vale a mais recente. */
+const RegistroAdmissao *sim_admissao_tarefa(const Simulador *s, int tarefa) {
+    for (int i = s->nadm - 1; i >= 0; i--)
+        if (s->adm[i].tarefa == tarefa && s->adm[i].ativacao < 0) return &s->adm[i];
+    return NULL;
+}
 
 /* O rastro do Gantt é uma tabela guardada num vetor 1D: a célula da tarefa
  * `tarefa` no tick `tick` fica em [tick * largura + tarefa] (largura =

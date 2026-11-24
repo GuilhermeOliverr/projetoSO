@@ -201,6 +201,8 @@ int tcb_chegada(const TCB *k, int j);     // Instante em que chegou a ativação
 bool tcb_eh_servidor(const TCB *k);       // true se a tarefa é um servidor (BSxx, PSxx, DSxx ou SSxx)
 bool tcb_eh_atendida(const TCB *k);       // true se é aperiódica ou esporádica: só executa por meio de um servidor (req. B 1.1)
 const char *tipo_nome(const TCB *k);      // Nome do tipo para as telas: "periódica", "aperiódica", "esporádica" ou "servidor BS"
+const char *tipo_nome_de(TipoTarefa tipo, TipoServidor servidor);    // O mesmo, a partir do tipo (para a configuração, antes do TCB existir)
+const char *tipo_curto(const TCB *k);     // Nome curto para as tabelas: "per.", "aper.", "esp." ou o tipo do servidor ("PS"
 void tcb_ativacoes_txt(const TCB *k, char *buf, size_t tam);    // "concluídas/total" para as tabelas; "-" num servidor, que não tem ativações contadas
 
 /* ===========================================================================
