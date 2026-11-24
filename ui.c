@@ -474,7 +474,7 @@ static void estatisticas(const Simulador *s) {
     for (int i = 0; i < e->n; i++) {
         const TCB *k = &e->tarefas[i];
         perdidos += k->deadlines_perdidos;
-        printf("  %*s%s %4d/%-2d %7d %7d %7d %8.1f %8d %6d %7d ", folga(k->id, 6), "", k->id, k->concluidas, MAX_ATIVACOES,
+        printf("  %*s%s %4d/%-2d %7d %7d %7d %8.1f %8d %6d %7d ", folga(k->id, 6), "", k->id, k->concluidas, tcb_total_ativacoes(k),
                k->deadlines_perdidos, k->ticks_exec, k->ticks_espera,
                k->concluidas ? (double)k->resposta_soma / k->concluidas : 0.0, k->resposta_max,
                k->preempcoes, k->sorteios);
@@ -568,7 +568,7 @@ static void detalhes_tarefa(const Simulador *s, int i) {
     printf("  estado: %s\n", estado_descricao(k));
     if (k->restante > 0)
         printf("  prioridade (menor = mais prioritária): nominal %d, ativa %d\n", k->prio_nominal, k->prio_ativa);
-    printf("  ativações: %d chegaram, %d concluídas (de %d)\n", k->liberadas, k->concluidas, MAX_ATIVACOES);
+    printf("  ativações: %d chegaram, %d concluídas (de %d)\n", k->liberadas, k->concluidas, tcb_total_ativacoes(k));
     if (k->restante > 0) {
         printf("  ativação atual: nº %d, chegou em %d, deadline em %d, faltam %d tick(s)%s\n",
                k->concluidas + 1, k->chegada_atual, k->deadline_abs, k->restante,
@@ -576,7 +576,7 @@ static void detalhes_tarefa(const Simulador *s, int i) {
         if (k->liberadas - k->concluidas > 1)
             printf("  ativações acumuladas esperando: %d\n", k->liberadas - k->concluidas - 1);
     }
-    if (k->liberadas < MAX_ATIVACOES && k->estado != T_TERMINADA)
+    if (k->liberadas < tcb_total_ativacoes(k) && k->estado != T_TERMINADA)
         printf("  próxima chegada: instante %d\n", k->proxima_chegada);
     printf("  CPU no último tick: %s", k->cpu >= 0 ? "" : "nenhuma\n");
     if (k->cpu >= 0) printf("CPU%d (quantum usado %d/%d)\n", k->cpu, k->quantum_usado, s->atual.quantum);
@@ -600,7 +600,7 @@ static void estado_sistema(const Simulador *s) {
     int *ordem = gantt_ordem(e);
     for (int r = e->n - 1; r >= 0; r--) {
         const TCB *k = &e->tarefas[ordem[r]];
-        printf("  %*s%s %-27s %4d/%-2d ", folga(k->id, 6), "", k->id, estado_descricao(k), k->concluidas, MAX_ATIVACOES);
+        printf("  %*s%s %-27s %4d/%-2d ", folga(k->id, 6), "", k->id, estado_descricao(k), k->concluidas, tcb_total_ativacoes(k));
         if (k->restante > 0) printf("%8d %8d ", k->restante, k->deadline_abs);
         else printf("%8s %8s ", "-", "-");
         if (k->cpu >= 0) printf("%5d ", k->cpu);
@@ -701,7 +701,7 @@ static void editar_tarefa(Simulador *s, int i, char *msg, size_t tam) {
     }
     if (k->estado == T_TERMINADA && op != 1) {
         fmsg(msg, tam, "erro: a tarefa %s já terminou as %d ativações; só a cor pode mudar",
-             k->id, MAX_ATIVACOES);
+             k->id, tcb_total_ativacoes(k));
         return;
     }
     int v = 0;
@@ -737,7 +737,7 @@ static void editar_tarefa(Simulador *s, int i, char *msg, size_t tam) {
     case 5:
         if (k->liberadas > 0) {
             fmsg(msg, tam, "erro: a tarefa %s já ingressou no instante %d; o ingresso só pode mudar "
-                 "antes da primeira chegada", k->id, k->chegadas[0]);
+                 "antes da primeira chegada", k->id, tcb_chegada(k, 0));
             return;
         }
         if (!pedir_int("ingresso", k->ingresso < t ? t : k->ingresso, &v, val_min, &t)) return;

@@ -85,6 +85,21 @@ bool ativacao_atual_perdeu_prazo(const TCB *k) {
     return k->restante > 0 && k->perdas_ate > k->concluidas;
 }
 
+/* Quantas ativações a tarefa tem ao todo. Toda consulta ao "fim" da tarefa
+ * passa por aqui, e não pela constante, porque o total depende do tipo da
+ * tarefa: a periódica "termina" após MAX_ATIVACOES (req. 4.4). */
+int tcb_total_ativacoes(const TCB *k) {
+    (void)k;
+    return MAX_ATIVACOES;
+}
+
+/* Instante em que chegou a ativação j, que já precisa ter sido liberada
+ * (0 <= j < liberadas). Fica numa função pelo mesmo motivo da anterior: o
+ * lugar de onde vem a chegada depende do tipo da tarefa. */
+int tcb_chegada(const TCB *k, int j) {
+    return k->chegadas[j];
+}
+
 /* Nome de cada tipo de evento, para as listas de eventos do passo a passo. */
 const char *evento_nome(TipoEvento t) {
     switch (t) {
@@ -167,7 +182,7 @@ void sim_liberar(Simulador *s) {
 
 /* Começa a próxima ativação pendente (a de número `concluidas`, contando de
  * 0). Se a tarefa já terminou 3 ativações, a próxima é a de índice 3, e a
- * hora em que ela chegou está guardada em chegadas[3].
+ * hora em que ela chegou é tcb_chegada(k, 3).
  *
  * O prazo (deadline absoluto) é a chegada DESTA ativação + o prazo relativo
  * do arquivo. Ex.: chegou em 30, prazo 10 -> precisa terminar até o instante 40.
@@ -178,7 +193,7 @@ void sim_liberar(Simulador *s) {
  * de prontas, por isso vira o fila_desde (ver sched.h). */
 static void iniciar_ativacao(TCB *k, int agora) {
     k->restante = k->duracao;
-    k->chegada_atual = k->chegadas[k->concluidas];
+    k->chegada_atual = tcb_chegada(k, k->concluidas);
     k->deadline_abs = k->chegada_atual + k->prazo;
     k->quantum_usado = 0;
     k->fila_desde = agora;
@@ -371,8 +386,8 @@ static bool executar_tick(Simulador *s) {
      * período que "pule" o instante exato não perca a ativação. */
     for (int i = 0; i < e->n; i++) {
         TCB *k = &e->tarefas[i];
-        /* Terminadas, ou que já liberaram as 10 ativações: nada a fazer. */
-        if (k->estado == T_TERMINADA || k->liberadas >= MAX_ATIVACOES) continue;
+        /* Terminadas, ou que já liberaram todas as ativações: nada a fazer. */
+        if (k->estado == T_TERMINADA || k->liberadas >= tcb_total_ativacoes(k)) continue;
         if (t < k->proxima_chegada) continue;   /* ainda não é a hora */
         k->chegadas[k->liberadas] = t;          /* anota a hora da chegada */
         evento_add(s, t, t, EV_CHEGADA, i, k->liberadas, -1);
@@ -445,8 +460,8 @@ static bool executar_tick(Simulador *s) {
             k->resposta_soma += resp;
             k->concluidas++;
             evento_add(s, t, t + 1, EV_FIM_ATIVACAO, i, k->concluidas - 1, k->cpu);
-            if (k->concluidas >= MAX_ATIVACOES) {
-                /* Era a 10ª: a tarefa periódica "termina" (req. 4.4). */
+            if (k->concluidas >= tcb_total_ativacoes(k)) {
+                /* Era a última (a 10ª da periódica): a tarefa "termina" (req. 4.4). */
                 k->estado = T_TERMINADA;
                 k->termino = t + 1;
                 k->cpu = -1;
@@ -464,7 +479,7 @@ static bool executar_tick(Simulador *s) {
                  * (ela só é liberada no passo 1 do próximo tick), a tarefa
                  * continua contando como "estava executando" para o critério
                  * 1, igual ao caso da ativação acumulada acima. */
-                if (!(k->liberadas < MAX_ATIVACOES && k->proxima_chegada == t + 1))
+                if (!(k->liberadas < tcb_total_ativacoes(k) && k->proxima_chegada == t + 1))
                     k->cpu = -1;
             }
         }
@@ -484,7 +499,7 @@ static bool executar_tick(Simulador *s) {
          * venceram, e o laço pode parar. */
         int j0 = k->perdas_ate > k->concluidas ? k->perdas_ate : k->concluidas;
         for (int j = j0; j < k->liberadas; j++) {
-            int deadline = k->chegadas[j] + k->prazo;
+            int deadline = tcb_chegada(k, j) + k->prazo;
             if (deadline > t + 1) break;
             k->perdas_ate = j + 1;
             k->deadlines_perdidos++;
@@ -871,8 +886,8 @@ const char *valida_id(const char *v, const char *const *ids, int n, int proprio)
 //em que a próxima ativação da tarefa deve ser liberada na simulação.
 void edicao_periodo(TCB *k, int v) {
     k->periodo = v;
-    if (k->liberadas > 0 && k->liberadas < MAX_ATIVACOES)
-        k->proxima_chegada = k->chegadas[k->liberadas - 1] + v;
+    if (k->liberadas > 0 && k->liberadas < tcb_total_ativacoes(k))
+        k->proxima_chegada = tcb_chegada(k, k->liberadas - 1) + v;
 }
 
 //Aplica um novo prazo relativo 'v' na tarefa 'k'. Se a tarefa estiver com uma ativação em andamento (restante > 0), reajusta imediatamente o seu deadline absoluto.

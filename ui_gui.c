@@ -1626,14 +1626,14 @@ static void linhas_tarefa(const Sessao *z, int i, Linhas *L) {
             k->ingresso, k->duracao, k->periodo, k->prazo);
     lin_add(L, C_TEXTO, false, "Estado: %s", estado_descricao(k));
     if (k->restante > 0) lin_add(L, C_TEXTO, false, "Prioridade (menor = mais prioritária): nominal %d, ativa %d", k->prio_nominal, k->prio_ativa);
-    lin_add(L, C_TEXTO, false, "Ativações: %d chegaram, %d concluídas (de %d)", k->liberadas, k->concluidas, MAX_ATIVACOES);
+    lin_add(L, C_TEXTO, false, "Ativações: %d chegaram, %d concluídas (de %d)", k->liberadas, k->concluidas, tcb_total_ativacoes(k));
     if (k->restante > 0) {
         bool perdeu = ativacao_atual_perdeu_prazo(k);
         lin_add(L, perdeu ? C_ERRO : C_TEXTO, perdeu, "Ativação atual: nº %d, chegou em %d, deadline em %d, faltam %d tick(s)%s",
                 k->concluidas + 1, k->chegada_atual, k->deadline_abs, k->restante, perdeu ? " - PRAZO PERDIDO" : "");
         if (k->liberadas - k->concluidas > 1) lin_add(L, C_TEXTO, false, "Ativações acumuladas esperando: %d", k->liberadas - k->concluidas - 1);
     }
-    if (k->liberadas < MAX_ATIVACOES && k->estado != T_TERMINADA) lin_add(L, C_TEXTO, false, "Próxima chegada: instante %d", k->proxima_chegada);
+    if (k->liberadas < tcb_total_ativacoes(k) && k->estado != T_TERMINADA) lin_add(L, C_TEXTO, false, "Próxima chegada: instante %d", k->proxima_chegada);
     if (k->cpu >= 0) lin_add(L, C_TEXTO, false, "CPU no último tick: CPU%d (quantum usado %d/%d)", k->cpu, k->quantum_usado, z->s.atual.quantum);
     else lin_add(L, C_TEXTO, false, "CPU no último tick: nenhuma");
     lin_add(L, C_TEXTO, false, "Executou %d, esperou %d, suspensa %d tick(s); %d preempção(ões), %d sorteio(s), %d prazo(s) perdido(s)",
@@ -1669,7 +1669,7 @@ static void linhas_sistema(const Sessao *z, Linhas *L) {
         }
         if (k->cpu >= 0) snprintf(cpu, sizeof cpu, "%d", k->cpu);
         lin_add(L, k->deadlines_perdidos ? C_ERRO : C_TEXTO, false, "%*s%s  %-27s %3d/%-2d %8s %8s %4s %6d", folga(k->id, 6), "", k->id,
-                estado_descricao(k), k->concluidas, MAX_ATIVACOES, rest, dl, cpu, k->deadlines_perdidos);
+                estado_descricao(k), k->concluidas, tcb_total_ativacoes(k), rest, dl, cpu, k->deadlines_perdidos);
         L->v[L->n - 1].amostra = k->cor;
     }
     free(ordem);
@@ -1688,7 +1688,7 @@ static void linhas_estatisticas(const Simulador *s, Linhas *L) {
         perdidos += k->deadlines_perdidos;
         char term[16] = "-";
         if (k->termino >= 0) snprintf(term, sizeof term, "%d", k->termino);
-        lin_add(L, C_TEXTO, false, "%*s%s %4d/%-2d %7d %7d %7d %8.1f %8d %6d %7d %7s", folga(k->id, 6), "", k->id, k->concluidas, MAX_ATIVACOES,
+        lin_add(L, C_TEXTO, false, "%*s%s %4d/%-2d %7d %7d %7d %8.1f %8d %6d %7d %7s", folga(k->id, 6), "", k->id, k->concluidas, tcb_total_ativacoes(k),
                 k->deadlines_perdidos, k->ticks_exec, k->ticks_espera,
                 k->concluidas ? (double)k->resposta_soma / k->concluidas : 0.0, k->resposta_max, k->preempcoes,
                 k->sorteios, term);
@@ -1798,11 +1798,11 @@ static void editar_na_simulacao(Sessao *z, int i) {
     else snprintf(c[E_RESTANTE].valor, sizeof c[0].valor, "-");
 
     Linhas intro = {0};
-    lin_add(&intro, C_TEXTO, false, "Estado: %s | ativações %d/%d", estado_descricao(k), k->concluidas, MAX_ATIVACOES);
+    lin_add(&intro, C_TEXTO, false, "Estado: %s | ativações %d/%d", estado_descricao(k), k->concluidas, tcb_total_ativacoes(k));
     lin_add(&intro, C_FRACO, false, "A mudança vale a partir do instante %d. A duração nova vale a partir da próxima", t);
     lin_add(&intro, C_FRACO, false, "ativação (\"ticks restantes\" muda a atual).");
-    if (terminou) lin_add(&intro, C_AVISO, false, "A tarefa já terminou as %d ativações: só a cor pode mudar.", MAX_ATIVACOES);
-    else if (k->liberadas > 0) lin_add(&intro, C_FRACO, false, "O ingresso não muda mais: a tarefa já chegou no instante %d.", k->chegadas[0]);
+    if (terminou) lin_add(&intro, C_AVISO, false, "A tarefa já terminou as %d ativações: só a cor pode mudar.", tcb_total_ativacoes(k));
+    else if (k->liberadas > 0) lin_add(&intro, C_FRACO, false, "O ingresso não muda mais: a tarefa já chegou no instante %d.", tcb_chegada(k, 0));
 
     BotaoExtra ex[2] = {{suspensa_pelo_usuario(k) ? "Retomar" : "Suspender", E_SUSPENDER, B_NORMAL},
                         {"Encerrar agora", E_ENCERRAR, B_PERIGO}};

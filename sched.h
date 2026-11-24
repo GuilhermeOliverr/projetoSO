@@ -87,7 +87,7 @@ typedef struct {
     MotivoSuspensao motivo;    // Razão da suspensão da tarefa quando estado == T_SUSPENSA (SUSP_PERIODO ou SUSP_USUARIO)
     int liberadas;             // Contador da quantidade de ativações que já foram liberadas/chegaram no sistema
     int concluidas;            // Contador da quantidade de ativações que já foram totalmente concluídas (máximo 10)
-    int chegadas[MAX_ATIVACOES]; // Vetor que registra o instante exato de relógio (tick) de chegada de cada uma das 10 ativações
+    int chegadas[MAX_ATIVACOES]; // Instante de chegada de cada ativação; não leia direto, use tcb_chegada()
     int proxima_chegada;       // Instante do relógio global em que ocorrerá a liberação da próxima ativação //do periodo da tarefa (chegada do próximo job)
     int restante;              // Quantidade de ticks de CPU que ainda faltam ser executados para concluir a ativação atual
     int chegada_atual;         // Instante do relógio em que a ativação atualmente em andamento foi liberada
@@ -137,6 +137,9 @@ const char *estado_descricao(const TCB *k);    // Retorna a descrição detalhad
 bool suspensa_pelo_usuario(const TCB *k);    // Retorna true se a tarefa foi suspensa manualmente pelo usuário (SUSP_USUARIO), impedindo que chegue a progredir sozinha
 
 bool ativacao_atual_perdeu_prazo(const TCB *k);    // true se a ativação em andamento (a de número `concluidas`) já foi marcada como prazo perdido
+
+int tcb_total_ativacoes(const TCB *k);    // Quantas ativações a tarefa tem ao todo; quando chega a esse número de concluídas, ela termina
+int tcb_chegada(const TCB *k, int j);     // Instante em que chegou a ativação j (de 0 a liberadas-1)
 
 /* ===========================================================================
  * Seção sched.h (originalmente include/sched.h)
