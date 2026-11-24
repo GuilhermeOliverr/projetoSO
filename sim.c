@@ -1460,12 +1460,63 @@ const char *valida_positivo(int v) {
     return v > 0 ? NULL : "o valor deve ser maior que zero";
 }
 
-//Valida se o período 'v' é permitido no Projeto.
-//Recusa o valor 0 (pois indicaria tarefa aperiódica, não simulada no Projeto A) e valores negativos. 
-//Retorna NULL se for válido (> 0), ou o motivo da recusa caso contrário.
+//Valida um período que precisa ser positivo (periódica ou servidor). Para uma tarefa nova, que pode ser de
+//qualquer tipo, use valida_periodo_tarefa; para editar uma tarefa da simulação, valida_periodo_edicao.
 const char *valida_periodo(int v) {
-    if (v == 0) return "período 0 significa tarefa aperiódica, que o Projeto A não simula";
     return v > 0 ? NULL : "o período deve ser maior que zero";
+}
+
+/* Projeto B: numa tarefa nova o período diz o tipo (> 0 periódica, 0
+ * aperiódica, < 0 esporádica), e só o servidor, que é periódico, exige > 0.
+ * INT_MIN fica de fora porque |INT_MIN| não cabe num int. */
+const char *valida_periodo_tarefa(int v, const char *id) {
+    if (v == INT_MIN) return "número grande demais";
+    if (config_id_servidor(id, NULL) && v <= 0)
+        return "o id indica um servidor, que é uma tarefa periódica: o período deve ser maior que zero";
+    return NULL;
+}
+
+/* O mesmo padrão do arquivo de configuração (ler_linha_tarefa). */
+int prazo_padrao_tipo(TipoTarefa tipo, int periodo) {
+    return tipo == TIPO_ESPORADICA ? -periodo : tipo == TIPO_APERIODICA ? 0 : periodo;
+}
+
+/* A aperiódica pode não ter prazo (0); as demais precisam de um. */
+const char *valida_prazo_tarefa(int v, TipoTarefa tipo) {
+    if (tipo == TIPO_APERIODICA) return v >= 0 ? NULL : "o prazo não pode ser negativo (0 = aperiódica sem prazo)";
+    return v > 0 ? NULL : "o prazo deve ser maior que zero";
+}
+
+/* Na aperiódica e na esporádica a lista de eventos são os instantes de
+ * chegada, com as mesmas regras do arquivo (req. B 1.3). */
+const char *valida_eventos_tarefa(const char *eventos, TipoTarefa tipo, int periodo, int ingresso) {
+    if (tipo != TIPO_APERIODICA && tipo != TIPO_ESPORADICA) return NULL;
+    return config_ocorrencias(eventos, tipo, periodo, ingresso, NULL, NULL);
+}
+
+/* Durante a simulação o período não pode trocar o tipo da tarefa: o TCB,
+ * as ativações já liberadas e a admissão dependem dele. Na esporádica, o
+ * novo intervalo mínimo ainda precisa caber entre as ocorrências da lista. */
+const char *valida_periodo_edicao(const TCB *k, int v) {
+    static char buf[200];
+    switch (k->tipo) {
+    case TIPO_APERIODICA:
+        return v == 0 ? NULL : "o período da aperiódica é 0: mudar o tipo da tarefa durante a simulação não é permitido";
+    case TIPO_ESPORADICA:
+        if (v >= 0 || v == INT_MIN)
+            return "o período da esporádica é negativo (|período| = intervalo mínimo): mudar o tipo da tarefa durante "
+                   "a simulação não é permitido";
+        for (int j = 1; j < k->nocorrencias; j++)
+            if (k->ocorrencias[j] - k->ocorrencias[j - 1] < -v) {
+                snprintf(buf, sizeof buf, "as ocorrências %d e %d estão a %d tick(s) uma da outra, menos que o novo "
+                         "intervalo mínimo (%d)", k->ocorrencias[j - 1], k->ocorrencias[j],
+                         k->ocorrencias[j] - k->ocorrencias[j - 1], -v);
+                return buf;
+            }
+        return NULL;
+    default:
+        return v > 0 ? NULL : "o período deve ser maior que zero (mudar o tipo da tarefa durante a simulação não é permitido)";
+    }
 }
 
 //Valida se o instante de primeiro ingresso da tarefa não é menor que o tick atual 'min'. 
@@ -1504,7 +1555,12 @@ const char *valida_id(const char *v, const char *const *ids, int n, int proprio)
 //em que a próxima ativação da tarefa deve ser liberada na simulação.
 void edicao_periodo(TCB *k, int v) {
     k->periodo = v;
-    if (k->liberadas > 0 && k->liberadas < tcb_total_ativacoes(k))
+    /* Só a periódica e os servidores que recarregam por período (PS e DS)
+     * chegam a cada período; a próxima chegada da aperiódica/esporádica vem
+     * da lista, e a do BS e do SS não existe depois do ingresso. */
+    bool por_periodo = k->tipo == TIPO_PERIODICA ||
+                       (tcb_eh_servidor(k) && (k->servidor == SERV_PS || k->servidor == SERV_DS));
+    if (por_periodo && k->liberadas > 0 && k->liberadas < tcb_total_ativacoes(k))
         k->proxima_chegada = tcb_chegada(k, k->liberadas - 1) + v;
 }
 

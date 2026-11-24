@@ -19,6 +19,7 @@
  * com gantt_* (gantt.c).
  */
 #include "ui.h"
+#include "admissao.h"
 #include "sim.h"
 #include "gantt.h"
 #include "config.h"
@@ -101,8 +102,16 @@ static bool pedir_cor(unsigned sugerida, unsigned *out) {
 /* As regras em si ficam na seção edicao.c de sim.c (a janela usa as mesmas); estes
  * adaptadores só encaixam cada uma no formato Validador. */
 static const char *val_positivo(int v, const void *ctx) { (void)ctx; return valida_positivo(v); }
-static const char *val_periodo(int v, const void *ctx) { (void)ctx; return valida_periodo(v); }
+static const char *val_periodo_id(int v, const void *ctx) { return valida_periodo_tarefa(v, (const char *)ctx); }
+static const char *val_periodo_k(int v, const void *ctx) { return valida_periodo_edicao((const TCB *)ctx, v); }
+static const char *val_prazo_tipo(int v, const void *ctx) { return valida_prazo_tarefa(v, *(const TipoTarefa *)ctx); }
 static const char *val_min(int v, const void *ctx) { return valida_ingresso(v, *(const int *)ctx); }
+static const char *val_capacidade(int v, const void *ctx) {
+    static char buf[64];
+    if (v >= 0 && v <= *(const int *)ctx) return NULL;
+    snprintf(buf, sizeof buf, "a capacidade deve estar entre 0 e %d (a do servidor)", *(const int *)ctx);
+    return buf;
+}
 
 static const char *val_quantum(int v, const void *ctx) { (void)ctx; return config_validar_quantum(v); }
 /* Rótulo do prompt de CPUs com o limite N à vista (steering, ambig. 6).
@@ -225,21 +234,41 @@ static int pedir_algoritmo(int atual) {
 /* Lê os dados de uma tarefa nova (ou editada, se `t` já vier preenchida).
  * `min_ingresso` impede chegar no passado durante a simulação. Cada campo
  * usa o valor atual de `t` como sugestão (req. 3.2: valores padrão). */
+/* O tipo da tarefa sai do id (servidor) e do sinal do período (Projeto B):
+ * depois do período, os campos seguintes já são pedidos com as regras do
+ * tipo (prazo 0 só na aperiódica; instantes de chegada na lista de eventos
+ * da aperiódica e da esporádica). */
 static bool pedir_tarefa(TarefaCfg *t, const CtxIds *ids, int min_ingresso, char *eventos, size_t tam_ev) {
     if (!pedir_id(t->id, t->id, sizeof t->id, ids)) return false;
     if (!pedir_cor(t->cor, &t->cor)) return false;
     if (!pedir_int("ingresso", t->ingresso, &t->ingresso, val_min, &min_ingresso)) return false;
-    if (!pedir_int("duração", t->duracao, &t->duracao, val_positivo, NULL)) return false;
+    bool servidor = config_id_servidor(t->id, NULL);
+    if (!pedir_int(servidor ? "capacidade (duração)" : "duração", t->duracao, &t->duracao, val_positivo, NULL)) return false;
+    TipoTarefa tipo_antigo = t->tipo;
     int periodo_antigo = t->periodo;
-    if (!pedir_int("período", t->periodo, &t->periodo, val_periodo, NULL)) return false;
+    if (!pedir_int(servidor ? "período do servidor" : "período (> 0 periódica, 0 aperiódica, < 0 esporádica)", t->periodo,
+                   &t->periodo, val_periodo_id, t->id))
+        return false;
+    config_classificar(t);
+    printf("  tipo: %s\n", tipo_nome_de(t->tipo, t->servidor));
     /* Se o prazo acompanhava o período (prazo implícito), continua acompanhando. */
-    int sug = t->prazo == periodo_antigo ? t->periodo : t->prazo;
-    if (!pedir_int("prazo", sug, &t->prazo, val_positivo, NULL)) return false;
-    char prompt[600];
-    snprintf(prompt, sizeof prompt, "  lista de eventos [%s]: ", t->eventos ? t->eventos : "");
-    char buf[512];
-    if (!ler_linha(prompt, buf, sizeof buf)) return false;
-    snprintf(eventos, tam_ev, "%s", *buf ? buf : (t->eventos ? t->eventos : ""));
+    int sug = t->prazo == prazo_padrao_tipo(tipo_antigo, periodo_antigo) ? prazo_padrao_tipo(t->tipo, t->periodo) : t->prazo;
+    if (valida_prazo_tarefa(sug, t->tipo)) sug = prazo_padrao_tipo(t->tipo, t->periodo);
+    if (!pedir_int(t->tipo == TIPO_APERIODICA ? "prazo (0 = sem prazo)" : "prazo", sug, &t->prazo, val_prazo_tipo, &t->tipo))
+        return false;
+    bool chegadas = t->tipo == TIPO_APERIODICA || t->tipo == TIPO_ESPORADICA;
+    const char *atual = t->eventos ? t->eventos : "";
+    char prompt[700], buf[512];
+    snprintf(prompt, sizeof prompt, "  %s [%s]: ",
+             chegadas ? "instantes de chegada, relativos ao ingresso (ex.: 0,20,45; vazio = só no ingresso)"
+                      : "lista de eventos", atual);
+    for (;;) {
+        if (!ler_linha(prompt, buf, sizeof buf)) return false;
+        snprintf(eventos, tam_ev, "%s", *buf ? buf : atual);
+        const char *m = valida_eventos_tarefa(eventos, t->tipo, t->periodo, t->ingresso);
+        if (!m) break;
+        ui_erro("%s", m);
+    }
     t->eventos = eventos;
     return true;
 }
@@ -394,6 +423,7 @@ bool ui_menu_config(Config *cfg) {
                 t.lista_ev = dst->lista_ev;
                 t.nev = dst->nev;
                 *dst = t;
+                config_classificar(dst);   /* o período (ou o id) pode ter mudado o tipo */
                 config_definir_eventos(dst, ev);
             }
             free(ids);
@@ -826,10 +856,12 @@ static void editar_tarefa(Simulador *s, int i, char *msg, size_t tam) {
     int t = e->t;
     detalhes_tarefa(s, i);
     printf("\nO que alterar? (no instante %d)\n"
-           "  1) cor   2) duração   3) período   4) prazo   5) ingresso\n"
-           "  6) ticks restantes da ativação atual\n"
+           "  1) cor   2) %s   3) período   4) prazo   5) ingresso\n"
+           "  6) %s\n"
            "  7) %s   8) encerrar a tarefa agora   0) cancelar\n",
-           t, suspensa_pelo_usuario(k) ? "retomar (tirar da suspensão)" : "suspender");
+           t, tcb_eh_servidor(k) ? "capacidade" : "duração",
+           tcb_eh_servidor(k) ? "capacidade que o servidor tem agora" : "ticks restantes da ativação atual",
+           suspensa_pelo_usuario(k) ? "retomar (tirar da suspensão)" : "suspender");
     char buf[32];
     if (!ler_linha("> ", buf, sizeof buf) || !*buf || buf[0] == '0') {
         fmsg(msg, tam, "Edição cancelada.");
@@ -841,8 +873,13 @@ static void editar_tarefa(Simulador *s, int i, char *msg, size_t tam) {
         return;
     }
     if (k->estado == T_TERMINADA && op != 1) {
-        fmsg(msg, tam, "erro: a tarefa %s já terminou as %d ativações; só a cor pode mudar",
-             k->id, tcb_total_ativacoes(k));
+        if (k->recusada)
+            fmsg(msg, tam, "erro: a tarefa %s foi recusada pelo teste de admissão; só a cor pode mudar", k->id);
+        else if (tcb_eh_servidor(k))
+            fmsg(msg, tam, "erro: o servidor %s já terminou; só a cor pode mudar", k->id);
+        else
+            fmsg(msg, tam, "erro: a tarefa %s já terminou as %d ativações; só a cor pode mudar",
+                 k->id, tcb_total_ativacoes(k));
         return;
     }
     int v = 0;
@@ -855,21 +892,30 @@ static void editar_tarefa(Simulador *s, int i, char *msg, size_t tam) {
         fmsg(msg, tam, "Cor da tarefa %s alterada para %06X.", k->id, cor);
         break;
     case 2:
-        if (!pedir_int("duração", k->duracao, &v, val_positivo, NULL)) return;
+        if (!pedir_int(tcb_eh_servidor(k) ? "capacidade (duração)" : "duração", k->duracao, &v, val_positivo, NULL)) return;
         sim_preparar_edicao(s);
         k->duracao = v;
-        fmsg(msg, tam, "Duração da tarefa %s = %d (vale a partir da próxima ativação; use a opção 6 "
-             "para mudar a atual).", k->id, v);
+        if (tcb_eh_servidor(k))
+            fmsg(msg, tam, "Capacidade do servidor %s = %d (vale a partir da próxima recarga; use a opção 6 "
+                 "para mudar a que ele tem agora).", k->id, v);
+        else
+            fmsg(msg, tam, "Duração da tarefa %s = %d (vale a partir da próxima ativação; use a opção 6 "
+                 "para mudar a atual).", k->id, v);
         break;
     case 3:
-        if (!pedir_int("período", k->periodo, &v, val_periodo, NULL)) return;
+        if (!pedir_int("período", k->periodo, &v, val_periodo_k, k)) return;
         sim_preparar_edicao(s);
         edicao_periodo(k, v);
-        fmsg(msg, tam, "Período da tarefa %s = %d; próxima chegada no instante %d%s.", k->id, v,
-             k->proxima_chegada, k->proxima_chegada < t ? " (já passou: chega no próximo tick)" : "");
+        if (k->tipo == TIPO_PERIODICA || (tcb_eh_servidor(k) && (k->servidor == SERV_PS || k->servidor == SERV_DS)))
+            fmsg(msg, tam, "Período da tarefa %s = %d; próxima chegada no instante %d%s.", k->id, v,
+                 k->proxima_chegada, k->proxima_chegada < t ? " (já passou: chega no próximo tick)" : "");
+        else
+            fmsg(msg, tam, "Período da tarefa %s = %d.", k->id, v);
         break;
     case 4:
-        if (!pedir_int("prazo", k->prazo, &v, val_positivo, NULL)) return;
+        if (!pedir_int(k->tipo == TIPO_APERIODICA ? "prazo (0 = sem prazo)" : "prazo", k->prazo, &v, val_prazo_tipo,
+                       &k->tipo))
+            return;
         sim_preparar_edicao(s);
         edicao_prazo(k, v);
         fmsg(msg, tam, "Prazo da tarefa %s = %d%s.", k->id, v,
@@ -887,6 +933,18 @@ static void editar_tarefa(Simulador *s, int i, char *msg, size_t tam) {
         fmsg(msg, tam, "Ingresso da tarefa %s = %d.", k->id, v);
         break;
     case 6:
+        if (tcb_eh_servidor(k)) {   /* o servidor não tem ativação própria: a opção mexe na capacidade */
+            if (k->servidor == SERV_BS) {
+                fmsg(msg, tam, "erro: o Background Server %s não tem capacidade (usa toda CPU que sobra)", k->id);
+                return;
+            }
+            int lim = k->duracao;
+            if (!pedir_int("capacidade restante", k->capacidade, &v, val_capacidade, &lim)) return;
+            sim_preparar_edicao(s);
+            k->capacidade = v;
+            fmsg(msg, tam, "Servidor %s agora tem %d tick(s) de capacidade até a próxima recarga.", k->id, v);
+            break;
+        }
         if (k->restante <= 0) {
             fmsg(msg, tam, "erro: a tarefa %s não tem ativação em andamento (estado: %s)", k->id,
                  estado_descricao(k));
@@ -913,6 +971,17 @@ static void editar_tarefa(Simulador *s, int i, char *msg, size_t tam) {
         break;
     }
     sim_concluir_edicao(s);
+    /* Mudou um parâmetro de uma tarefa que já está no sistema: o teste de
+     * admissão não bloqueia a edição (é o usuário mexendo no sistema como
+     * num debugger), mas avisa o que ele diria agora. */
+    if ((op == 2 || op == 3 || op == 4) && k->admitida && k->estado != T_TERMINADA && e->admissao) {
+        Admissao a = admissao_tarefa(e, i);
+        if (a.resultado != ADM_ACEITA) {
+            size_t l = strlen(msg);
+            snprintf(msg + l, tam - l, " Aviso: com o valor novo, o teste de admissão daria \"%s\" (%s).",
+                     admissao_nome(a.resultado), a.motivo);
+        }
+    }
 }
 
 /* Comando `+`: acrescenta uma tarefa com a simulação em andamento. O TCB
@@ -944,7 +1013,14 @@ static void adicionar_tarefa(Simulador *s, Config *extras, char *msg, size_t tam
     sim_preparar_edicao(s);
     sim_adicionar_tarefa(s, &extras->tarefas[extras->n - 1]);
     sim_concluir_edicao(s);
-    fmsg(msg, tam, "Tarefa %s adicionada; chega no instante %d.", t.id, t.ingresso);
+    const TCB *k = &s->atual.tarefas[s->atual.n - 1];
+    fmsg(msg, tam, "Tarefa %s adicionada (%s); é criada no instante %d e passa pelo teste de admissão lá.", t.id,
+         tipo_nome(k), t.ingresso);
+    if (s->atual.admissao) {
+        Admissao a = admissao_tarefa(&s->atual, s->atual.n - 1);
+        size_t l = strlen(msg);
+        snprintf(msg + l, tam - l, " Se entrasse agora: %s (%s).", admissao_nome(a.resultado), a.motivo);
+    }
 }
 
 /* Modo (a): o "debugger" do sistema. Laço principal, a cada volta:

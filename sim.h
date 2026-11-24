@@ -172,6 +172,13 @@ const char *valida_positivo(int v);  // Recebe um inteiro 'v' e verifica se é e
 
 const char *valida_periodo(int v);  // Valida se o novo período 'v' cumpre as regras do sistema (> 0)
 
+/* Projeto B: o tipo da tarefa sai do id e do sinal do período (config_classificar). */
+const char *valida_periodo_tarefa(int v, const char *id);    // Tarefa nova: qualquer período (> 0 periódica, 0 aperiódica, < 0 esporádica), menos num servidor, que precisa de > 0
+const char *valida_prazo_tarefa(int v, TipoTarefa tipo);     // Aperiódica: >= 0 (0 = sem prazo); as demais: > 0
+const char *valida_eventos_tarefa(const char *eventos, TipoTarefa tipo, int periodo, int ingresso);    // Aperiódica/esporádica: os instantes de chegada (config_ocorrencias); nas demais, qualquer texto
+const char *valida_periodo_edicao(const TCB *k, int v);
+int prazo_padrao_tipo(TipoTarefa tipo, int periodo);    // Prazo quando não informado: o período (periódica e servidor), |período| (esporádica) ou 0 = sem prazo (aperiódica)    // Durante a simulação o tipo não muda; na esporádica, o novo |período| ainda precisa caber entre as ocorrências
+
 const char *valida_ingresso(int v, int min);  // Garante que o novo instante de ingresso 'v' não seja menor que 'min' (tick atual da simulação)
 
 const char *valida_id(const char *v, const char *const *ids, int n, int proprio);  // Verifica se o ID 'v' informado é único (id_iguais) entre os 'n' ids, ignorando a posição 'proprio' (-1 = tarefa nova)

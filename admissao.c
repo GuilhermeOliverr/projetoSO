@@ -349,7 +349,11 @@ static long long demanda_esporadicas(const Estado *e, int cand, long long x) {
  * calcular (passa do limite). */
 static long long resposta_esporadicas(const Estado *e, int cand) {
     long long B = tempo_para(e, demanda_esporadicas(e, cand, 0)), B2;
-    while (B >= 0 && (B2 = tempo_para(e, demanda_esporadicas(e, cand, B - 1))) > B) B = B2;
+    int voltas = 0;   /* com a banda das esporádicas igual à dos servidores, o período ocupado pode não acabar */
+    while (B >= 0 && (B2 = tempo_para(e, demanda_esporadicas(e, cand, B - 1))) > B) {
+        if (++voltas > 10000) return -1;
+        B = B2;
+    }
     if (B < 0) return -1;
     long long pior = 0, pontos = 0;
     for (int i = 0; i < e->n; i++) {
