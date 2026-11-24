@@ -500,22 +500,30 @@ static int tamanho_da_fila(const Estado *e) {
     return n;
 }
 
-/* A primeira da fila é a que chegou antes (FIFO). Chegadas no mesmo instante
- * vão pela ordem do vetor, para o resultado não depender de sorteio. -1 se a
- * fila está vazia. */
+/* Ordem da fila, que é a política dos servidores (req. B 2.2): primeiro as
+ * esporádicas, cujo prazo o teste de admissão garantiu; depois as
+ * aperiódicas. Em cada grupo, quem chegou antes (FIFO); chegadas no mesmo
+ * instante vão pela ordem do vetor, para o resultado não depender de sorteio. */
+static bool vem_antes(const Estado *e, int a, int b) {
+    const TCB *x = &e->tarefas[a], *y = &e->tarefas[b];
+    bool ex = x->tipo == TIPO_ESPORADICA, ey = y->tipo == TIPO_ESPORADICA;
+    if (ex != ey) return ex;
+    if (x->chegada_atual != y->chegada_atual) return x->chegada_atual < y->chegada_atual;
+    return a < b;
+}
+
+/* A primeira da fila (ver vem_antes); -1 se a fila está vazia. */
 static int primeira_da_fila(const Estado *e) {
     int melhor = -1;
-    for (int i = 0; i < e->n; i++) {
-        const TCB *k = &e->tarefas[i];
-        if (na_fila(k) && (melhor < 0 || k->chegada_atual < e->tarefas[melhor].chegada_atual)) melhor = i;
-    }
+    for (int i = 0; i < e->n; i++)
+        if (na_fila(&e->tarefas[i]) && (melhor < 0 || vem_antes(e, i, melhor))) melhor = i;
     return melhor;
 }
 
 /* Desfaz os vínculos que deixaram de valer: a aperiódica foi suspensa pelo
  * usuário ou editada, ou o servidor foi suspenso ou encerrado. A aperiódica
- * volta para a fila. No andamento normal não há nada a desfazer aqui: o
- * vínculo acaba no passo 4, quando a ativação termina. */
+ * volta para a fila. No andamento normal o vínculo acaba no passo 4, quando
+ * a ativação termina, ou aqui, quando uma esporádica chega (ver abaixo). */
 static void conferir_vinculos(Estado *e) {
     for (int i = 0; i < e->n; i++) {
         TCB *k = &e->tarefas[i];
@@ -531,6 +539,20 @@ static void conferir_vinculos(Estado *e) {
     for (int i = 0; i < e->n; i++) {
         TCB *a = &e->tarefas[i];
         if (a->atendida_por >= 0 && e->tarefas[a->atendida_por].atendendo != i) a->atendida_por = -1;
+    }
+    /* Uma esporádica esperando na fila tira a aperiódica dos servidores: a
+     * aperiódica volta para a fila (na frente das outras aperiódicas, pela
+     * chegada) e a esporádica é pega no lugar dela, para o prazo garantido
+     * na admissão não depender de uma aperiódica longa que chegou antes. */
+    bool esporadica_esperando = false;
+    for (int i = 0; i < e->n; i++)
+        if (na_fila(&e->tarefas[i]) && e->tarefas[i].tipo == TIPO_ESPORADICA) esporadica_esperando = true;
+    if (!esporadica_esperando) return;
+    for (int i = 0; i < e->n; i++) {
+        TCB *k = &e->tarefas[i];
+        if (!tcb_eh_servidor(k) || k->atendendo < 0 || e->tarefas[k->atendendo].tipo != TIPO_APERIODICA) continue;
+        e->tarefas[k->atendendo].atendida_por = -1;
+        k->atendendo = -1;
     }
 }
 

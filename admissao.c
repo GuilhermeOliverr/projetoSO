@@ -9,11 +9,21 @@
  *     de um período e no começo do outro), e por isso entra com um jitter
  *     J = T - C: é o efeito "back-to-back" do capítulo;
  *   - ESPORÁDICA: a banda que as esporádicas pedem, C/min(D, |P|), tem de
- *     caber na banda reservada pelos servidores, Cs/Ts;
+ *     caber na banda reservada pelos servidores, Cs/Ts; e o pior tempo de
+ *     resposta na fila tem de caber no prazo de cada uma. Na fila elas
+ *     passam na frente das aperiódicas e são atendidas por ordem de
+ *     chegada (sim.c), então o pior caso é o de uma esporádica que chega
+ *     junto com uma ocorrência de cada outra, no período mais ocupado;
  *   - APERIÓDICA: precisa existir servidor. Sem prazo, é aceita; com prazo,
- *     cada ativação é testada ao entrar na fila: o trabalho que está na
- *     frente dela na fila mais o dela tem de caber no que os servidores
- *     garantem até o prazo.
+ *     cada ativação é testada ao entrar na fila: o trabalho das aperiódicas
+ *     na frente dela, mais o dela, mais o que as esporádicas podem pedir até
+ *     o prazo (elas passam na frente) tem de caber no que os servidores
+ *     garantem até lá.
+ * "O que os servidores garantem" num intervalo é o modelo de recurso
+ * periódico: um servidor de capacidade Cs a cada Ts entrega, no pior caso,
+ * nada por 2(Ts - Cs) e depois Cs a cada Ts (função garantido). Com mais de
+ * um servidor as garantias são somadas, o que é uma aproximação: uma
+ * ativação só executa num servidor por vez.
  *
  * Testes da carga periódica, conforme o algoritmo e o número de CPUs:
  *   1 CPU, RM:  Liu & Layland (U <= n(2^(1/n)-1), só com prazo = período e
@@ -279,6 +289,82 @@ static double banda_servidores(const Estado *e, int cand, bool *tem_bs, bool *te
     return b;
 }
 
+/* Pior caso do que um servidor de capacidade Q a cada P garante em
+ * qualquer intervalo de tamanho L (modelo de recurso periódico): no pior
+ * caso ele fica 2(P - Q) sem executar e depois entrega Q a cada P. */
+static long long garantido(long long P, long long Q, long long L) {
+    if (L <= 0) return 0;
+    if (Q >= P) return L;
+    long long b = P - Q;
+    if (L < b) return 0;
+    long long k = (L - b) / P;
+    long long extra = L - 2 * b - k * P;
+    return k * Q + (extra > 0 ? extra : 0);
+}
+
+/* Soma do que os servidores com capacidade do sistema garantem em L. */
+static long long oferta_servidores(const Estado *e, long long L) {
+    long long o = 0;
+    for (int i = 0; i < e->n; i++) {
+        const TCB *x = &e->tarefas[i];
+        if (servidor_com_capacidade(x) && no_sistema(e, i, -1) && x->periodo > 0) o += garantido(x->periodo, x->duracao, L);
+    }
+    return o;
+}
+
+/* Menor intervalo em que os servidores garantem W ticks (-1 se passa de
+ * LIMITE_TICKS). A oferta só cresce com L: busca binária. */
+static long long tempo_para(const Estado *e, long long W) {
+    if (W <= 0) return 0;
+    long long lo = W, hi = W;
+    while (oferta_servidores(e, hi) < W) {
+        if (hi > LIMITE_TICKS) return -1;
+        hi *= 2;
+    }
+    while (lo < hi) {
+        long long m = lo + (hi - lo) / 2;
+        if (oferta_servidores(e, m) >= W) hi = m;
+        else lo = m + 1;
+    }
+    return lo;
+}
+
+/* Trabalho das esporádicas do sistema (com a candidata) que chega num
+ * intervalo de tamanho x contando a que chega no fim dele: floor(x/|P|)+1
+ * ocorrências de cada (a primeira no início). */
+static long long demanda_esporadicas(const Estado *e, int cand, long long x) {
+    long long w = 0;
+    for (int i = 0; i < e->n; i++) {
+        const TCB *k = &e->tarefas[i];
+        if (k->tipo == TIPO_ESPORADICA && no_sistema(e, i, cand)) w += (x / -k->periodo + 1) * k->duracao;
+    }
+    return w;
+}
+
+/* Pior tempo de resposta de uma esporádica na fila (FIFO entre elas). No
+ * período ocupado que começa com uma ocorrência de cada esporádica, uma que
+ * chega no instante x espera tudo o que chegou até x, inclusive ela: termina
+ * quando os servidores garantiram esse trabalho. O pior caso está num x em
+ * que alguma chegada acontece (múltiplo de algum |P|). -1 = não deu para
+ * calcular (passa do limite). */
+static long long resposta_esporadicas(const Estado *e, int cand) {
+    long long B = tempo_para(e, demanda_esporadicas(e, cand, 0)), B2;
+    while (B >= 0 && (B2 = tempo_para(e, demanda_esporadicas(e, cand, B - 1))) > B) B = B2;
+    if (B < 0) return -1;
+    long long pior = 0, pontos = 0;
+    for (int i = 0; i < e->n; i++) {
+        const TCB *k = &e->tarefas[i];
+        if (k->tipo != TIPO_ESPORADICA || !no_sistema(e, i, cand)) continue;
+        for (long long x = 0; x < B; x += -k->periodo) {
+            if (++pontos > MAX_PONTOS_DEMANDA) return -1;
+            long long f = tempo_para(e, demanda_esporadicas(e, cand, x));
+            if (f < 0) return -1;
+            if (f - x > pior) pior = f - x;
+        }
+    }
+    return pior;
+}
+
 static Admissao teste_esporadica(const Estado *e, int cand) {
     const TCB *k = &e->tarefas[cand];
     bool tem_bs, tem_algum;
@@ -296,58 +382,62 @@ static Admissao teste_esporadica(const Estado *e, int cand) {
     }
     if (banda <= 0)
         return resultado(ADM_SEM_GARANTIA, "só há Background Server, que não reserva banda (executa quando sobra CPU)");
-    if (pedida <= banda + EPS)
-        return resultado(ADM_ACEITA, "banda das esporádicas, soma de C/min(D,|P|) = %.3f <= banda dos servidores, "
+    if (pedida > banda + EPS)
+        return resultado(ADM_RECUSADA, "banda das esporádicas, soma de C/min(D,|P|) = %.3f > banda dos servidores, "
                          "soma de Cs/Ts = %.3f", pedida, banda);
-    return resultado(ADM_RECUSADA, "banda das esporádicas, soma de C/min(D,|P|) = %.3f > banda dos servidores, "
-                     "soma de Cs/Ts = %.3f", pedida, banda);
-}
-
-/* Pior caso do que um servidor de capacidade Q a cada P garante em
- * qualquer intervalo de tamanho L (modelo de recurso periódico): no pior
- * caso ele fica 2(P - Q) sem executar e depois entrega Q a cada P. */
-static long long garantido(long long P, long long Q, long long L) {
-    if (L <= 0) return 0;
-    if (Q >= P) return L;
-    long long b = P - Q;
-    if (L < b) return 0;
-    long long k = (L - b) / P;
-    long long extra = L - 2 * b - k * P;
-    return k * Q + (extra > 0 ? extra : 0);
+    long long R = resposta_esporadicas(e, cand);
+    if (R < 0)
+        return resultado(ADM_SEM_GARANTIA, "banda %.3f <= %.3f, mas o pior tempo de resposta na fila não pôde ser "
+                         "calculado (período ocupado longo demais)", pedida, banda);
+    for (int i = 0; i < e->n; i++) {
+        const TCB *x = &e->tarefas[i];
+        if (x->tipo == TIPO_ESPORADICA && no_sistema(e, i, cand) && R > x->prazo)
+            return resultado(ADM_RECUSADA, "banda %.3f <= %.3f, mas na fila dos servidores %s%s poderia esperar até %lld "
+                             "tick(s), mais que o prazo (%d)", pedida, banda, i == cand ? "ela" : "com ela, ",
+                             i == cand ? "" : x->id, R, x->prazo);
+    }
+    return resultado(ADM_ACEITA, "banda das esporádicas %.3f <= banda dos servidores %.3f, e o pior tempo de resposta "
+                     "na fila (%lld) cabe no prazo de todas", pedida, banda, R);
 }
 
 Admissao admissao_ativacao(const Estado *e, int cand, int agora) {
     const TCB *k = &e->tarefas[cand];
     long long L = (long long)k->deadline_abs - agora;
-    long long oferta = 0;
     bool tem_bs = false, tem_cap = false;
     for (int i = 0; i < e->n; i++) {
         const TCB *x = &e->tarefas[i];
         if (!tcb_eh_servidor(x) || !no_sistema(e, i, -1)) continue;
-        if (x->servidor == SERV_BS) {
-            tem_bs = true;
-        } else if (x->periodo > 0) {
-            tem_cap = true;
-            oferta += garantido(x->periodo, x->duracao, L);
-        }
+        if (x->servidor == SERV_BS) tem_bs = true;
+        else if (x->periodo > 0) tem_cap = true;
     }
+    long long oferta = oferta_servidores(e, L);
     if (!tem_cap && !tem_bs) return resultado(ADM_RECUSADA, "não há servidor para executá-la");
     if (!tem_cap)
         return resultado(ADM_SEM_GARANTIA, "só há Background Server, que não garante tempo até o prazo");
-    /* Na frente dela (a fila é por ordem de chegada): as aperiódicas que
-     * chegaram antes e ainda não acabaram, estejam na fila ou com um servidor. */
-    long long frente = 0;
+    /* Na frente dela: as aperiódicas que chegaram antes e ainda não
+     * acabaram (estejam na fila ou com um servidor) e as esporádicas, que
+     * passam na frente de qualquer aperiódica. Das esporádicas conta o que
+     * pode estar pendente ou chegar até o prazo: as que chegaram nos
+     * últimos D (garantidas em D) e as que chegam nos próximos L. */
+    long long frente = 0, esporadicas = 0;
     for (int i = 0; i < e->n; i++) {
         const TCB *x = &e->tarefas[i];
-        if (i == cand || !tcb_eh_atendida(x) || x->restante <= 0) continue;
+        if (x->tipo == TIPO_ESPORADICA && no_sistema(e, i, -1)) {
+            esporadicas += ((L + x->prazo) / -x->periodo + 1) * x->duracao;
+            continue;
+        }
+        if (i == cand || x->tipo != TIPO_APERIODICA || x->restante <= 0) continue;
         if (x->estado != T_PRONTA && x->estado != T_EXECUTANDO) continue;
         if (x->chegada_atual < k->chegada_atual || (x->chegada_atual == k->chegada_atual && i < cand)) frente += x->restante;
     }
-    if (frente + k->restante <= oferta)
-        return resultado(ADM_ACEITA, "o trabalho na frente dela (%lld) mais o dela (%d) cabe no que os servidores garantem "
-                         "até o prazo (%lld em %lld tick(s))", frente, k->restante, oferta, L);
-    return resultado(ADM_RECUSADA, "o trabalho na frente dela (%lld) mais o dela (%d) passa do que os servidores garantem "
-                     "até o prazo (%lld em %lld tick(s))", frente, k->restante, oferta, L);
+    long long total = frente + esporadicas + k->restante;
+    if (total <= oferta)
+        return resultado(ADM_ACEITA, "aperiódicas na frente (%lld) + esporádicas até o prazo (%lld) + a dela (%d) cabe "
+                         "no que os servidores garantem até o prazo (%lld em %lld tick(s))", frente, esporadicas,
+                         k->restante, oferta, L);
+    return resultado(ADM_RECUSADA, "aperiódicas na frente (%lld) + esporádicas até o prazo (%lld) + a dela (%d) passa "
+                     "do que os servidores garantem até o prazo (%lld em %lld tick(s))", frente, esporadicas,
+                     k->restante, oferta, L);
 }
 
 /* ------------------------------------------------------------ entrada */
