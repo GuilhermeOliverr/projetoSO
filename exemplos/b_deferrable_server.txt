@@ -1,0 +1,8 @@
+# Projeto B: Deferrable Server com capacidade 1 a cada 5: guarda a
+# capacidade e atende a aperiódica assim que ela chega (t = 2).
+RM;2;1
+1;E74C3C;0;1;4;4
+2;3498DB;0;2;8;8
+DS1;95A5A6;0;1;5;5
+A1;F39C12;2;2;0
+A2;2ECC71;7;1;0

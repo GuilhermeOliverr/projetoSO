@@ -1,0 +1,7 @@
+# Projeto B: Sporadic Server com EDF. A capacidade gasta volta um período
+# (8) depois do instante em que o servidor ficou ativo.
+EDF;2;1
+1;E74C3C;0;3;10;10
+SS1;95A5A6;0;4;8;8
+A1;F39C12;1;2;0
+A2;2ECC71;4;5;0
