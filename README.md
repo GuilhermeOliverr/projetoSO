@@ -2,7 +2,11 @@
 
 Simulador de um sistema operacional multitarefa preemptivo com escalonadores de
 tempo real **Rate Monotonic (RM)** e **Earliest Deadline First (EDF)**, de 1 a N
-CPUs, desenvolvido em C11 para a disciplina de Sistemas Operacionais (Projeto A).
+CPUs, desenvolvido em C11 para a disciplina de Sistemas Operacionais. O Projeto A
+simula tarefas periódicas; o Projeto B acrescenta tarefas aperiódicas e
+esporádicas, executadas pelos servidores Background, Polling, Deferrable e
+Sporadic, e o teste de escalonabilidade na admissão de cada tarefa (seção
+"Projeto B").
 Tem interface gráfica em janela no Linux/WSL, no Windows e no macOS, feita só
 com a biblioteca padrão do C e com o que já vem em cada sistema: não precisa
 instalar nada além do compilador.
@@ -179,6 +183,8 @@ make
   --texto                no modo completo, imprime também a linha do tempo em texto
   --validar              só carrega e valida o arquivo (código de saída 0 = válido)
   --semente N            semente do sorteio de desempate (padrão 1; 0 = relógio)
+  --sem-admissao         não faz o teste de escalonabilidade ao criar cada tarefa
+                         (toda tarefa entra; a aperiódica sem servidor continua recusada)
   --plugin ARQ           carrega um escalonador: ARQ.txt (fórmula), ARQ.so ou ARQ.dylib;
                          pode repetir (ver "Como incluir um novo escalonador")
   --sem-cor              desliga as cores ANSI
@@ -256,9 +262,10 @@ qualquer momento.
 | `p [k]` | volta 1 (ou k) tick(s) |
 | `g t` | vai para o instante t |
 | `r` | roda até o fim |
-| `s` | estado do sistema (todas as tarefas, CPUs, utilização) |
-| `t id` | TCB completo de uma tarefa (`t 1`, `t T0`; sem diferenciar maiúsculas) |
-| `e id` | edita a tarefa: cor, duração, período, prazo, ingresso, ticks restantes, suspender/retomar, encerrar |
+| `s` | estado do sistema (todas as tarefas com o tipo, CPUs, utilização, fila de aperiódicas, resumo do teste de admissão) |
+| `t id` | TCB completo de uma tarefa (`t 1`, `t T0`; sem diferenciar maiúsculas); no servidor, a capacidade e a aperiódica que executa; na aperiódica, as ocorrências e o lugar na fila; e a decisão do teste de admissão |
+| `d` | decisões do teste de admissão, com o motivo de cada uma |
+| `e id` | edita a tarefa: cor, duração (capacidade, no servidor), período, prazo, ingresso, ticks restantes (capacidade atual, no servidor), suspender/retomar, encerrar |
 | `+` | adiciona uma tarefa |
 | `a` / `k` / `c` | troca algoritmo / quantum / quantidade de CPUs |
 | `v t` / `v` | fixa a janela do Gantt em t / volta a seguir o relógio |
@@ -279,6 +286,13 @@ fazem sentido são recusadas com o motivo.
   Suspensa: preto pontilhado.
 - Marcadores: chegada (↓), fim de ativação (↑ / △), término da 10ª ativação (■),
   perda de prazo (✗ vermelho), sorteio de desempate (?).
+- Projeto B: o **servidor** executando aparece com **listras e borda grossa**
+  (no terminal, `/`), e a **aperiódica/esporádica** executando com **borda
+  tracejada grossa** (no terminal, o número da CPU sublinhado). Na linha da
+  CPU, `PS1:A1` é o servidor PS1 executando a aperiódica A1. Marcadores novos:
+  recusada no teste de admissão (círculo vermelho cortado, `⊘`), recarga do
+  Sporadic Server (círculo verde com +, `⊕`) e capacidade descartada pelo
+  Polling Server (círculo laranja com -, `⊖`).
 - Linha da CPU no Gantt do terminal: cada trecho mostra o id da tarefa que ocupou
   a CPU. Ids de texto aparecem sem o prefixo comum a todos (T1, T2, T3 viram 1, 2,
   3, como com ids inteiros). Num trecho curto demais para o id, aparece o
@@ -322,15 +336,119 @@ RM;2;1
     (T0, T1, T5 → T6); senão n+1, pulando os que já existem.
 - **Comentário**: linha que começa com `#` e não tem nenhum `;` é ignorada. Com
   `;` ela é lida normalmente: `#1;E74C3C;0;2;10;10` é a tarefa de id `#1`.
-- Campo vazio usa o valor padrão (com aviso). `prazo` vazio ou ausente = período.
-- `periodo = 0` (aperiódica) é ignorada com aviso; `periodo < 0` é erro.
-- `lista_eventos` é guardada sem interpretação: o texto cru e a
-  lista separada por `,` ou `;` (sem limite de eventos por tarefa; nunca gera erro).
-  Ao carregar, um aviso informa quantos eventos cada tarefa tem.
+- Campo vazio usa o valor padrão (com aviso). `prazo` vazio ou ausente = período
+  (na esporádica, |período|; na aperiódica, sem prazo).
+- O **período diz o tipo** da tarefa: `> 0` periódica, `0` aperiódica e `< 0`
+  esporádica; um id `BSxx`, `PSxx`, `DSxx` ou `SSxx` é um servidor (seção
+  "Projeto B").
+- `lista_eventos`: na aperiódica e na esporádica são os **instantes de
+  chegada**, relativos ao ingresso (`0,20,45`), validados ao carregar (inteiros
+  >= 0, em ordem crescente e, na esporádica, separados por pelo menos
+  |período|). Nas periódicas e nos servidores é guardada sem interpretação: o
+  texto cru e a lista separada por `,` ou `;` (sem limite de eventos por
+  tarefa), e um aviso informa quantos eventos cada tarefa tem.
 - Erros dizem arquivo, linha, campo e motivo, por exemplo:
-  `config.txt:2: campo 'periodo' = -3: valor negativo não é permitido (...)`.
+  `config.txt:4: campo 'lista_eventos' da esporádica E1: as ocorrências 40 e 60
+  estão a 20 tick(s) uma da outra, menos que o intervalo mínimo da esporádica
+  (|periodo| = 30)`.
 
 Mais exemplos nas pastas `exemplos/` e `tests/validos/`.
+
+## Projeto B
+
+### Tipos de tarefa
+
+| Tipo | No arquivo | Ativações |
+|------|------------|-----------|
+| periódica | `periodo > 0` | uma por período; termina após 10 (req. 4.4 do Projeto A) |
+| aperiódica | `periodo = 0` (fica guardado no TCB) | nos instantes de `lista_eventos`, relativos ao ingresso; sem lista, uma só, no ingresso. Prazo 0 ou vazio = sem prazo |
+| esporádica | `periodo < 0`, com \|período\| = intervalo mínimo | nos instantes de `lista_eventos` (`0,20,45`, relativos ao ingresso); a carga recusa ocorrências mais próximas que \|período\| |
+| servidor | id `BSxx`, `PSxx`, `DSxx` ou `SSxx` (sem diferenciar maiúsculas; `xx` = número) | `duracao` = capacidade, `periodo` = período do servidor, `prazo` = prazo de cada período |
+
+Exemplo:
+
+```
+RM;2;1
+1;E74C3C;0;1;4;4
+2;3498DB;0;2;8;8
+PS1;95A5A6;0;1;5;5
+A1;F39C12;2;2;0
+E1;2ECC71;3;1;-10;10;0,12
+```
+
+### Servidores e fila de aperiódicas
+
+Aperiódicas e esporádicas **nunca disputam a CPU** (req. B 1.1): ficam numa
+fila, e quem disputa é o servidor, priorizado pelo próprio RM/EDF como uma
+periódica (no RM pelo período; no EDF pelo prazo do período atual). O servidor
+que ganha uma CPU tira a primeira da fila e fica com ela até a ativação acabar
+ou a capacidade dele esgotar; nenhum outro servidor a vê (req. B 2.2).
+
+- **Fila**: as esporádicas primeiro (o teste de admissão garantiu o prazo
+  delas), depois as aperiódicas, cada grupo por ordem de chegada. Uma
+  esporádica que chega tira a aperiódica de um servidor (ela volta para a fila).
+- **BS** (Background Server): só usa CPU que ficaria desligada; sem capacidade.
+- **PS** (Polling Server): a cada período volta a ter a capacidade inteira.
+  Disputa a CPU mesmo com a fila vazia; se ganhar a CPU e não houver aperiódica,
+  **perde a capacidade** até o próximo período (evento "capacidade descartada"),
+  e a CPU vai para a próxima candidata no mesmo tick.
+- **DS** (Deferrable Server): recarrega a cada período, mas só disputa a CPU
+  com capacidade **e** aperiódica para executar: guarda a capacidade e atende
+  a aperiódica assim que ela chega.
+- **SS** (Sporadic Server): começa com a capacidade inteira; fica ativo quando
+  tem capacidade e aperiódica, e o que gastar volta **um período depois do
+  instante em que ficou ativo** (evento "recarga"). No EDF, o prazo dele é esse
+  instante mais o prazo.
+
+Os servidores não terminam pela contagem de ativações: acabam junto com a
+simulação, quando todas as outras tarefas terminam.
+
+### Teste de admissão (req. B 3)
+
+Cada tarefa passa pelo teste **no instante em que é criada** (o ingresso),
+inclusive as adicionadas pela interface durante a simulação. No mesmo
+instante entram primeiro as periódicas e os servidores, depois as esporádicas e
+por fim as aperiódicas, cada grupo na ordem do arquivo. Recusada, a tarefa
+termina ali, sem executar. A decisão e o motivo aparecem no fim do modo
+completo, no comando `d`, no `t id` e nos painéis da janela.
+
+| Quem | Teste |
+|------|-------|
+| periódicas e servidores PS, DS e SS, 1 CPU, RM | Liu & Layland (U <= n(2^(1/n)-1), com prazo = período e sem DS) e, se não bastar, a análise do tempo de resposta. O DS entra com jitter T - C (efeito back-to-back) |
+| idem, 1 CPU, EDF | U <= 1 (com prazo >= período e sem DS) ou a análise de demanda do processador, h(L) <= L |
+| idem, M CPUs | U <= M é a condição necessária; suficientes: GFB (EDF) e Bertogna, Cirinei e Lipari (RM), com C/min(D,T) |
+| Background Server | não entra na carga (só usa CPU ociosa) |
+| esporádica | a banda pedida, soma de C/min(D,\|P\|), cabe na banda dos servidores, soma de Cs/Ts, e o pior tempo de resposta na fila cabe no prazo |
+| aperiódica | precisa existir servidor. Com prazo, cada ativação é testada ao entrar na fila: o trabalho na frente dela, mais o dela, mais o que as esporádicas podem pedir até o prazo, cabe no que os servidores garantem até lá |
+
+"O que os servidores garantem" num intervalo é o modelo de recurso periódico:
+um servidor de capacidade Cs a cada Ts pode ficar até 2(Ts - Cs) sem entregar
+nada e depois entrega Cs a cada Ts.
+
+Quando a condição necessária passa mas nenhum teste suficiente fecha (várias
+CPUs, Deferrable Server em várias CPUs, algoritmo que não é RM nem EDF, ou
+esporádica só com Background Server), a tarefa entra **sem garantia**, com
+aviso. Editar uma tarefa que já está no sistema não é bloqueado pelo teste,
+mas a mensagem avisa o que ele diria com os valores novos.
+
+Com `--sem-admissao` toda tarefa entra; a aperiódica sem nenhum servidor
+continua recusada, porque nunca executaria. Alguns exemplos do Projeto A
+mudam com o teste ligado (a fig. 2.6 com RM tem U = 100% e B é recusada, com
+R = 55 > 50); para ver a perda de prazo da figura, use `--sem-admissao`.
+
+### Exemplos
+
+Os arquivos `exemplos/b_*.txt` têm a conta à mão nos comentários, conferida
+pela bateria de testes:
+
+| Arquivo | Mostra |
+|---------|--------|
+| `b_background_server.txt` | BS nos ticks ociosos; esporádica antes da aperiódica |
+| `b_polling_server.txt` | descarte da capacidade e capacidade acabando no meio da aperiódica |
+| `b_deferrable_server.txt` | DS guardando a capacidade e atendendo na chegada |
+| `b_sporadic_server.txt` | recargas do SS (9, 12, 17 e 20) com EDF |
+| `b_admissao_recusa.txt` | PS1 recusado (R = 8 > 6) e aperiódicas sem servidor |
+| `b_aperiodica_com_prazo.txt` | ativação recusada ao entrar na fila e outra aceita |
 
 ## Como incluir um novo escalonador
 
@@ -511,7 +629,8 @@ de tamanho.
 - **Modelo de tempo**: o tick t é o intervalo [t, t+1). Chegadas acontecem no
   instante t; fim de ativação e perda de prazo são verificados no instante t+1.
   A ativação k chega em `ingresso + k·período` e tem deadline
-  `chegada + prazo`. Cada tarefa termina após 10 ativações.
+  `chegada + prazo`. Cada tarefa periódica termina após 10 ativações; a
+  aperiódica e a esporádica, após a última ocorrência da lista.
 - **Escalonamento global**: a cada tick, as M tarefas de maior prioridade
   (M = CPUs) executam; quem já estava numa CPU continua nela (evita migração).
   CPU sem tarefa fica desligada.
@@ -542,6 +661,15 @@ de tamanho.
   novo escalonador"). A fórmula é compilada na carga e avaliada sem estado
   próprio; uma falha (divisão por zero, estouro) para a simulação no tick, sem
   inventar valor.
+- **TCB copiável com `memcpy`** também no Projeto B: as ocorrências da
+  aperiódica apontam para a configuração (imutável, como os eventos), o
+  vínculo servidor-aperiódica é feito por índices, e as recargas pendentes do
+  Sporadic Server ficam num vetor fixo (cada trecho ativo gasta ao menos 1
+  tick; se o vetor encher, a recarga nova é somada à última e adiada, o que
+  nunca deixa o servidor passar da capacidade).
+- **Servidor sem trabalho não ocupa CPU**: se um servidor escolhido fica sem
+  aperiódica para pegar, a seleção do tick é refeita sem ele (com o sorteio
+  voltando ao estado anterior), para a CPU ir para a próxima candidata.
 - **Interface sem biblioteca**: a janela é desenhada pelo próprio programa
   num vetor de pixels (`gfx.c`, com uma fonte 8x16 embutida), e um trecho
   de `gfx_plataforma.c` por sistema só abre a janela e copia a
@@ -563,8 +691,9 @@ projetoSO/
 ├── main.c              # argumentos de linha de comando e fluxo principal
 ├── config.h / config.c # arquivo de configuração e valores padrão;
 │                       #   funções auxiliares (antigo util.c/util.h)
-├── sim.h / sim.c       # relógio, ativações, ciclo do tick, eventos;
+├── sim.h / sim.c       # relógio, ativações, ciclo do tick, eventos, servidores e fila de aperiódicas;
 │                       #   histórico (antigo history.c) e regras de edição (antigo edicao.c/edicao.h)
+├── admissao.h / admissao.c  # teste de escalonabilidade na admissão de cada tarefa (Projeto B)
 ├── sched.h / sched.c   # TCB (antigo task.h); RM, EDF, desempate comum e
 │                       #   tabela de escalonadores (antigos sched_rm/edf/tie/registro.c)
 ├── gantt.h / gantt.c   # Gantt em SVG, no terminal e na janela (antigos gantt_svg/tui/gfx.c)
@@ -573,7 +702,7 @@ projetoSO/
 ├── ui.h / ui.c         # interface de terminal: configuração, passo a passo e completo
 ├── ui_gui.c            # a mesma interface na janela gráfica
 ├── exemplo_fifo.c      # escalonador de exemplo, compilado à parte como biblioteca dinâmica (make plugins)
-├── exemplos/           # arquivos de configuração das figuras do capítulo 2 e o escalonador LLF.txt
+├── exemplos/           # figuras do capítulo 2, o escalonador LLF.txt e os exemplos do Projeto B (b_*.txt)
 ├── tests/              # bateria de testes (make test): validos/, invalidos/ e run_tests.sh
 ├── docs/               # enunciado do projeto (PDF)
 ├── Makefile
