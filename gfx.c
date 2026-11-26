@@ -352,6 +352,30 @@ void tela_hachurado(Tela *t, int x, int y, int w, int h) {
     tela_moldura(t, x, y, w, h, 0x999999);
 }
 
+/* Servidor executando (Projeto B, req. 4 da parte B): a cor do servidor
+ * com listras diagonais mais claras (metade cor, metade branco), no sentido
+ * contrário do hachurado da CPU desligada, para os dois não se confundirem.
+ * Sem borda: quem chama desenha a moldura. */
+void tela_listrado(Tela *t, int x, int y, int w, int h, uint32_t cor) {
+    uint32_t clara = ((cor >> 1) & 0x7F7F7F) + 0x7F7F7F;   /* média com o branco */
+    tela_ret(t, x, y, w, h, cor);
+    for (int j = 0; j < h; j++)
+        for (int i = 0; i < w; i++)
+            if (((x + i) - (y + j) + 6000) % 6 < 2) ponto(t, x + i, y + j, clara);
+}
+
+/* Aperiódica/esporádica executando por um servidor: moldura de 2 px,
+ * tracejada em cima e embaixo (traços de 4 px) e cheia nos lados. */
+void tela_moldura_grossa(Tela *t, int x, int y, int w, int h, uint32_t cor) {
+    for (int i = 0; i < w; i += 6) {
+        int l = w - i < 4 ? w - i : 4;
+        tela_ret(t, x + i, y, l, 2, cor);
+        tela_ret(t, x + i, y + h - 2, l, 2, cor);
+    }
+    tela_ret(t, x, y, 2, h, cor);
+    tela_ret(t, x + w - 2, y, 2, h, cor);
+}
+
 /* Bresenham: anda pelo eixo mais longo e decide pelo erro acumulado quando
  * dar um passo no outro. A espessura é um quadrado pintado em cada ponto. */
 void tela_linha(Tela *t, int x0, int y0, int x1, int y1, int esp, uint32_t cor) {

@@ -2082,7 +2082,7 @@ static void desenhar_simulacao(Sessao *z) {
     else if (*estado) y += linha_mensagem(x, y, w, estado) + 6;
 
     /* tamanhos: painéis de baixo, legenda e o resto para o gráfico */
-    int h_leg = gantt_gfx_legenda(&T, 0, 0, w - 24, false);
+    int h_leg = gantt_gfx_legenda(&T, 0, 0, w - 24, false, gantt_com_servidores(&z->s.atual));
     int h_paineis = T.h / 4 < 120 ? 120 : T.h / 4 > 200 ? 200 : T.h / 4;
     int h_gantt = T.h - y - 30 - 16 - h_leg - 14 - h_paineis - 12;
     if (h_gantt < 120) {
@@ -2152,7 +2152,7 @@ static void desenhar_simulacao(Sessao *z) {
     registrar(z->polegar_x, z->barra_y, z->polegar_w, 12, S_POLEGAR);
 
     /* legenda (req. 3: sempre visível junto do gráfico) */
-    gantt_gfx_legenda(&T, x + 12, z->barra_y + 18, w - 24, true);
+    gantt_gfx_legenda(&T, x + 12, z->barra_y + 18, w - 24, true, gantt_com_servidores(&z->s.atual));
 
     /* painéis de baixo: tick inspecionado | tarefa escolhida ou sistema */
     int py = T.h - h_paineis - 12;

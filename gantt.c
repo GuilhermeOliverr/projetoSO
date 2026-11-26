@@ -24,6 +24,12 @@ static bool cel_executando(CelulaGantt c) {
     return c == G_EXEC || c == G_SERVIDOR || c == G_APERIODICA;
 }
 
+bool gantt_com_servidores(const Estado *e) {
+    for (int i = 0; i < e->n; i++)
+        if (tcb_eh_servidor(&e->tarefas[i])) return true;
+    return false;
+}
+
 /* ===========================================================================
  * Seção gantt_svg.c (originalmente src/gantt/gantt_svg.c)
  * =========================================================================== */
@@ -138,6 +144,31 @@ static void sorteio(FILE *f, double x, double y) {
             "<text class=\"sorteio-t\" x=\"%.1f\" y=\"%.1f\">?</text>\n", x, y, x, y + 3.5);
 }
 
+/* Marcadores do Projeto B ("na entrada de algum servidor, uma sinalização"):
+ *   losango preto      = entrada do servidor no sistema (no ingresso);
+ *   círculo verde "+"  = recarga da capacidade do servidor;
+ *   triângulo azul ▶   = a aperiódica/esporádica entrou num servidor;
+ *   círculo cinza "−"  = o PS perdeu a capacidade (nenhuma pendente). */
+static void entrada_servidor(FILE *f, double x, double y) {
+    fprintf(f, "<path class=\"srv-entrada\" d=\"M%.1f %.1f L%.1f %.1f L%.1f %.1f L%.1f %.1f Z\"/>\n",
+            x, y, x + 5.5, y + 6.5, x, y + 13, x - 5.5, y + 6.5);
+}
+
+static void recarga(FILE *f, double x, double y) {
+    fprintf(f, "<circle class=\"recarga\" cx=\"%.1f\" cy=\"%.1f\" r=\"5.5\"/>"
+            "<text class=\"marca-t\" x=\"%.1f\" y=\"%.1f\">+</text>\n", x, y, x, y + 3.5);
+}
+
+static void atende(FILE *f, double x, double y) {
+    fprintf(f, "<path class=\"atende\" d=\"M%.1f %.1f L%.1f %.1f L%.1f %.1f Z\"/>\n",
+            x, y - 5, x + 8, y, x, y + 5);
+}
+
+static void descarte(FILE *f, double x, double y) {
+    fprintf(f, "<circle class=\"descarte\" cx=\"%.1f\" cy=\"%.1f\" r=\"5.5\"/>"
+            "<text class=\"marca-t\" x=\"%.1f\" y=\"%.1f\">−</text>\n", x, y, x, y + 3.5);
+}
+
 /* Gera o arquivo SVG da simulação INTEIRA (T = número de ticks simulados).
  * Devolve false e escreve o motivo em `erro` se não conseguir gravar. */
 bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char *erro, int tam_erro) {
@@ -164,7 +195,8 @@ bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char
     int y_leg = y_cpus + ncpu * ALT_CPU + 28;
     int larg = margem + T * cw + 40;
     if (larg < 980) larg = 980;
-    int alt = y_leg + 80;
+    bool servidores = gantt_com_servidores(e);   /* legenda do Projeto B só se houver servidor */
+    int alt = y_leg + 80 + (servidores ? 52 : 0);
 
     fprintf(f, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
                "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" height=\"%d\" "
@@ -178,6 +210,11 @@ bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char
           "<pattern id=\"deslig\" width=\"6\" height=\"6\" patternUnits=\"userSpaceOnUse\" "
           "patternTransform=\"rotate(45)\"><rect width=\"6\" height=\"6\" fill=\"#eee\"/>"
           "<line x1=\"0\" y1=\"0\" x2=\"0\" y2=\"6\" stroke=\"#aaa\" stroke-width=\"2\"/></pattern>\n"
+          /* servidor executando (parte B, req. 4): listras brancas por cima
+           * da cor do servidor, inclinadas ao contrário das da CPU desligada */
+          "<pattern id=\"listras\" width=\"6\" height=\"6\" patternUnits=\"userSpaceOnUse\" "
+          "patternTransform=\"rotate(-45)\"><line x1=\"0\" y1=\"0\" x2=\"0\" y2=\"6\" stroke=\"#fff\" "
+          "stroke-opacity=\"0.6\" stroke-width=\"2.4\"/></pattern>\n"
           "</defs>\n<style>\n"
           ".titulo{font-size:17px;font-weight:bold}.sub{font-size:12px;fill:#444}\n"
           ".rot{font-size:13px;font-weight:bold;text-anchor:end}\n"
@@ -194,6 +231,10 @@ bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char
           ".prazo{stroke:#E00000;stroke-width:2.6;fill:none}\n"
           ".sorteio{fill:#7B2CBF;stroke:#fff;stroke-width:1}\n"
           ".sorteio-t{font-size:10px;font-weight:bold;fill:#fff;text-anchor:middle}\n"
+          ".listras{fill:url(#listras)}\n"
+          ".aper{fill:none;stroke:#000;stroke-width:2.4;stroke-dasharray:5 2}\n"
+          ".srv-entrada{fill:#000}.recarga{fill:#1E8E3E}.descarte{fill:#888}.atende{fill:#1F6FEB}\n"
+          ".marca-t{font-size:11px;font-weight:bold;fill:#fff;text-anchor:middle}\n"
           ".leg{font-size:12px}\n"
           "</style>\n<rect width=\"100%\" height=\"100%\" fill=\"#fff\"/>\n", f);
 
@@ -260,6 +301,14 @@ bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char
             if (cel_executando(c)) {
                 fprintf(f, "<rect class=\"exec\" x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" fill=\"#%06X\"/>\n",
                         x, yb, w, ALT_BARRA, k->cor);
+                /* Parte B, req. 4: servidor executando = listrado; aperiódica
+                 * executando (por um servidor) = borda grossa tracejada. */
+                if (c == G_SERVIDOR)
+                    fprintf(f, "<rect class=\"listras\" x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\"/>\n",
+                            x, yb, w, ALT_BARRA);
+                else if (c == G_APERIODICA)
+                    fprintf(f, "<rect class=\"aper\" x=\"%.1f\" y=\"%.1f\" width=\"%.1f\" height=\"%.1f\"/>\n",
+                            x + 1.2, yb + 1.2, w - 2.4, ALT_BARRA - 2.4);
                 if (w >= 10) {
                     fprintf(f, "<text class=\"cpu-t\" x=\"%.1f\" y=\"%d\" fill=\"#%06X\">%s%d</text>\n",
                             x + w / 2.0, yb + 13, cor_contraste(k->cor), w >= 40 ? "CPU" : "", cpu);
@@ -281,12 +330,19 @@ bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char
         if (ev->tarefa >= n) continue;
         int yb = TOPO + linha_de[ev->tarefa] * ALT_LINHA + (ALT_LINHA - ALT_BARRA) - 4;
         double x = margem + (double)ev->instante * cw;
+        bool srv = tcb_eh_servidor(&e->tarefas[ev->tarefa]);
         switch (ev->tipo) {
-        case EV_CHEGADA: seta_baixo(f, x, yb - 14); break;
+        case EV_CHEGADA:
+            if (srv) entrada_servidor(f, x, yb - 15);
+            else seta_baixo(f, x, yb - 14);
+            break;
         case EV_FIM_ATIVACAO: triangulo_cima(f, x, yb); break;
         case EV_TERMINO: quadrado(f, x + 6, yb); break;
         case EV_PRAZO_PERDIDO: xis(f, x, yb + ALT_BARRA / 2.0); break;
         case EV_SORTEIO: sorteio(f, x + 6, yb - 8); break;
+        case EV_RECARGA: recarga(f, x, yb - 8); break;
+        case EV_ATENDIMENTO: atende(f, x + 4, yb - 8); break;   /* à direita da seta de chegada */
+        case EV_DESCARTE: descarte(f, x + 12, yb - 8); break;   /* ao lado da recarga do mesmo instante */
         default: break;
         }
     }
@@ -316,8 +372,16 @@ bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char
                 fprintf(f, "<rect class=\"exec\" x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" fill=\"#%06X\"/>\n",
                         x, y, w, ALT_CPU - 8, k->cor);
                 /* só escreve o rótulo se couber (~7 px por caractere,
-                 * contando caracteres e não bytes) */
+                 * contando caracteres e não bytes). Aperiódica executada por
+                 * um servidor: "C(PS1)", ou só "C" se não couber. */
                 id_rotulo(k->id, todos_inteiros, rot, sizeof rot);
+                int sv = sim_servidor_cpu(s, t, c);
+                if (sv >= 0 && sv != quem) {
+                    char srv_rot[ID_MAX + 8], junto[2 * ID_MAX + 20];
+                    id_rotulo(e->tarefas[sv].id, todos_inteiros, srv_rot, sizeof srv_rot);
+                    snprintf(junto, sizeof junto, "%s(%s)", rot, srv_rot);
+                    if (w >= utf8_colunas(junto) * 7 && strlen(junto) < sizeof rot) memcpy(rot, junto, strlen(junto) + 1);
+                }
                 if (w >= utf8_colunas(rot) * 7) {
                     fprintf(f, "<text class=\"cpu-t\" x=\"%.1f\" y=\"%d\" fill=\"#%06X\">",
                             x + w / 2.0, y + 13, cor_contraste(k->cor));
@@ -362,6 +426,34 @@ bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char
     lx += 130;
     sorteio(f, lx + 6, ly - 5);
     fprintf(f, "<text class=\"leg\" x=\"%d\" y=\"%d\">sorteio (desempate)</text>\n", lx + 16, ly);
+    if (servidores) {
+        /* Projeto B: servidores e aperiódicas (req. 4 da parte B) */
+        lx = 16;
+        ly += 26;
+        fprintf(f, "<rect class=\"exec\" x=\"%d\" y=\"%d\" width=\"28\" height=\"14\" fill=\"#2ECC71\"/>"
+                   "<rect class=\"listras\" x=\"%d\" y=\"%d\" width=\"28\" height=\"14\"/>"
+                   "<text class=\"leg\" x=\"%d\" y=\"%d\">servidor executando (listrado)</text>\n",
+                lx, ly - 11, lx, ly - 11, lx + 34, ly);
+        lx += 230;
+        fprintf(f, "<rect class=\"exec\" x=\"%d\" y=\"%d\" width=\"28\" height=\"14\" fill=\"#F39C12\"/>"
+                   "<rect class=\"aper\" x=\"%.1f\" y=\"%.1f\" width=\"25.6\" height=\"11.6\"/>"
+                   "<text class=\"leg\" x=\"%d\" y=\"%d\">aperiódica/esporádica executando por um servidor "
+                   "(borda tracejada)</text>\n", lx, ly - 11, lx + 1.2, ly - 9.8, lx + 34, ly);
+        lx = 16;
+        ly += 26;
+        entrada_servidor(f, lx + 6, ly - 13);
+        fprintf(f, "<text class=\"leg\" x=\"%d\" y=\"%d\">entrada do servidor</text>\n", lx + 16, ly);
+        lx += 160;
+        recarga(f, lx + 6, ly - 5);
+        fprintf(f, "<text class=\"leg\" x=\"%d\" y=\"%d\">recarga da capacidade</text>\n", lx + 16, ly);
+        lx += 175;
+        atende(f, lx + 2, ly - 5);
+        fprintf(f, "<text class=\"leg\" x=\"%d\" y=\"%d\">entrou no servidor</text>\n", lx + 16, ly);
+        lx += 150;
+        descarte(f, lx + 6, ly - 5);
+        fprintf(f, "<text class=\"leg\" x=\"%d\" y=\"%d\">capacidade descartada (PS sem pendência)</text>\n",
+                lx + 16, ly);
+    }
 
     fputs("</svg>\n", f);
     free(ordem);
@@ -400,6 +492,9 @@ bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char
  *   marcador:  ↓ chegada  ↑ fim de ativação  ↕ os dois no mesmo instante
  *              (todos na coluna do instante exato: a coluna t começa em t)
  *              ■ término (10ª ativação)  ✗ perda de prazo
+ *   Projeto B: ▒ servidor executando (na cor dele); nº da CPU sublinhado =
+ *              aperiódica executando por um servidor; ◆ entrada do servidor,
+ *              + recarga, » entrou no servidor, ∅ capacidade descartada
  *   CPUs:      cor e id da tarefa que ocupou a CPU; · CPU desligada
  *
  * De onde vêm os dados: o simulador (sim.c) já guardou, para cada tick e
@@ -439,6 +534,9 @@ void gantt_mascaras(const Simulador *s, int ini, int fim, unsigned char *mask) {
         case EV_TERMINO: *m |= M_TERMINO; break;
         case EV_PRAZO_PERDIDO: *m |= M_PRAZO; break;
         case EV_SORTEIO: *m |= M_SORTEIO; break;
+        case EV_RECARGA: *m |= M_RECARGA; break;
+        case EV_ATENDIMENTO: *m |= M_ATENDE; break;
+        case EV_DESCARTE: *m |= M_DESCARTE; break;
         default: break;   /* preempção e fim de quantum não têm marcador */
         }
     }
@@ -651,6 +749,7 @@ void gantt_tui(const Simulador *s, int ini, int fim) {
          * dá a prioridade visual: perda de prazo > término > chegada+fim
          * > fim > chegada. */
         printf("%*s ", lbl, "");
+        bool srv = tcb_eh_servidor(k);
         for (int t = ini; t < fim_m; t++) {
             unsigned m = mask[(size_t)(t - ini) * n + i];
             if (m & M_PRAZO) {
@@ -660,12 +759,20 @@ void gantt_tui(const Simulador *s, int ini, int fim) {
                 term_reset();
             } else if (m & M_TERMINO) {
                 fputs("■", stdout);
+            } else if (srv && (m & M_CHEGADA)) {
+                fputs("◆", stdout);   /* entrada do servidor no sistema */
             } else if ((m & M_CHEGADA) && (m & M_FIM)) {
                 fputs("↕", stdout);
             } else if (m & M_FIM) {
                 fputs("↑", stdout);
             } else if (m & M_CHEGADA) {
                 fputs("↓", stdout);
+            } else if (m & M_DESCARTE) {
+                fputs("∅", stdout);
+            } else if (m & M_RECARGA) {
+                fputs("+", stdout);
+            } else if (m & M_ATENDE) {
+                fputs("»", stdout);
             } else {
                 putchar(' ');
             }
@@ -686,12 +793,22 @@ void gantt_tui(const Simulador *s, int ini, int fim) {
             unsigned m = mask[(size_t)(t - ini) * n + i];
             switch (sim_celula(s, t, i)) {
             case G_SERVIDOR:
+                /* servidor executando: o "listrado" do terminal é o ▒ na
+                 * cor do servidor, sem fundo (a CPU aparece na linha da
+                 * aperiódica e nas linhas das CPUs) */
+                term_fg(k->cor);
+                fputs((m & M_SORTEIO) ? "?" : "▒", stdout);
+                term_reset();
+                break;
             case G_APERIODICA:
             case G_EXEC:
                 /* fundo = cor da tarefa; texto = número da CPU (ou '?' se
-                 * a tarefa foi escolhida por sorteio neste tick). */
+                 * a tarefa foi escolhida por sorteio neste tick). A
+                 * aperiódica executando por um servidor sai sublinhada
+                 * (ESC[4m, o sublinhado do terminal). */
                 term_bg(k->cor);
                 term_fg(cor_contraste(k->cor));
+                if (g_usar_cores && sim_celula(s, t, i) == G_APERIODICA) fputs("\x1b[4m", stdout);
                 putchar((m & M_SORTEIO) ? '?' : digito_cpu(sim_cpu_celula(s, t, i)));
                 term_reset();
                 break;
@@ -796,6 +913,17 @@ void gantt_tui(const Simulador *s, int ini, int fim) {
     printf(" CPU desligada\n         ↓ chegada  ↑ fim de ativação  ↕ chegada+fim  ■ término  ");
     term_fg(COR_PRAZO); fputs("✗", stdout); term_reset();
     printf(" perda de prazo\n");
+    if (gantt_com_servidores(e)) {
+        printf("         ");
+        term_fg(0x2ECC71); fputs("▒", stdout); term_reset();
+        printf(" servidor executando  ");
+        term_bg(0xF39C12); term_fg(0x000000);
+        if (g_usar_cores) fputs("\x1b[4m", stdout);
+        fputs("0", stdout); term_reset();
+        printf(" aperiódica/esporádica executando por um servidor (CPU sublinhada)\n"
+               "         ◆ entrada do servidor  + recarga da capacidade  » entrou no servidor  "
+               "∅ capacidade descartada (PS)\n");
+    }
 }
 
 /* Gantt de toda a simulação: quebra em "faixas" da largura do terminal
@@ -950,6 +1078,27 @@ static void sorteio_gfx(Tela *t, int x, int y) {
     tela_texto(t, x - 3, y - 8, "?", 0xFFFFFF);
 }
 
+/* Marcadores do Projeto B (os mesmos do SVG): losango = entrada do
+ * servidor; círculo verde "+" = recarga; triângulo azul = entrou no
+ * servidor; círculo cinza "-" = capacidade descartada (PS). */
+static void entrada_servidor_gfx(Tela *t, int x, int y) {
+    tela_triangulo(t, x - 5, y + 6, x + 5, y + 6, x, y, 0x000000);
+    tela_triangulo(t, x - 5, y + 6, x + 5, y + 6, x, y + 12, 0x000000);
+}
+
+static void recarga_gfx(Tela *t, int x, int y) {
+    tela_circulo(t, x, y, 6, 0x1E8E3E);
+    tela_ret(t, x - 3, y, 7, 1, 0xFFFFFF);
+    tela_ret(t, x, y - 3, 1, 7, 0xFFFFFF);
+}
+
+static void atende_gfx(Tela *t, int x, int y) { tela_triangulo(t, x, y - 5, x, y + 5, x + 8, y, 0x1F6FEB); }
+
+static void descarte_gfx(Tela *t, int x, int y) {
+    tela_circulo(t, x, y, 6, 0x888888);
+    tela_ret(t, x - 3, y, 7, 1, 0xFFFFFF);
+}
+
 /* Texto centralizado num trecho, só se couber. */
 static void texto_no_meio(Tela *t, int x, int w, int y, const char *s, uint32_t cor) {
     int l = texto_largura(s);
@@ -1034,8 +1183,12 @@ void gantt_gfx(Tela *t, const Simulador *s, VistaGantt *v) {
             while (c2 < t_fim && sim_celula(s, c2, i) == g && sim_cpu_celula(s, c2, i) == cpu) c2++;
             int x = x0 + (c - v->t_ini) * v->cw, w = (c2 - c) * v->cw;
             if (cel_executando(g)) {
-                tela_ret(t, x, yb, w, ALT_BARRA, k->cor);
-                tela_moldura(t, x, yb, w, ALT_BARRA, 0x222222);
+                /* Parte B, req. 4: servidor = listrado; aperiódica por um
+                 * servidor = moldura grossa tracejada; periódica = sólido. */
+                if (g == G_SERVIDOR) tela_listrado(t, x, yb, w, ALT_BARRA, k->cor);
+                else tela_ret(t, x, yb, w, ALT_BARRA, k->cor);
+                if (g == G_APERIODICA) tela_moldura_grossa(t, x, yb, w, ALT_BARRA, 0x000000);
+                else tela_moldura(t, x, yb, w, ALT_BARRA, 0x222222);
                 char rot[16];
                 snprintf(rot, sizeof rot, "CPU%d", cpu);
                 if (texto_largura(rot) + 2 > w) snprintf(rot, sizeof rot, "%d", cpu);
@@ -1059,11 +1212,17 @@ void gantt_gfx(Tela *t, const Simulador *s, VistaGantt *v) {
         int yb = base + linha_de[ev->tarefa] * ALT_LINHA + DESC_BARRA;
         int x = x0 + (ev->instante - v->t_ini) * v->cw;
         switch (ev->tipo) {
-        case EV_CHEGADA: seta_baixo_gfx(t, x, yb - 14); break;
+        case EV_CHEGADA:
+            if (tcb_eh_servidor(&e->tarefas[ev->tarefa])) entrada_servidor_gfx(t, x, yb - 14);
+            else seta_baixo_gfx(t, x, yb - 14);
+            break;
         case EV_FIM_ATIVACAO: triangulo_cima_gfx(t, x, yb); break;
         case EV_TERMINO: quadrado_gfx(t, x + 6, yb); break;
         case EV_PRAZO_PERDIDO: xis_gfx(t, x, yb + ALT_BARRA / 2); break;
         case EV_SORTEIO: sorteio_gfx(t, x + 7, yb - 7); break;
+        case EV_RECARGA: recarga_gfx(t, x, yb - 8); break;
+        case EV_ATENDIMENTO: atende_gfx(t, x + 4, yb - 8); break;
+        case EV_DESCARTE: descarte_gfx(t, x + 13, yb - 8); break;
         default: break;
         }
     }
@@ -1088,6 +1247,14 @@ void gantt_gfx(Tela *t, const Simulador *s, VistaGantt *v) {
                 tela_moldura(t, x, y, w, ALT_CPU - 6, 0x222222);
                 char rot[ID_MAX + 8];
                 id_rotulo(k->id, todos_inteiros, rot, sizeof rot);
+                /* aperiódica executada por um servidor: "C(PS1)" se couber */
+                int sv = sim_servidor_cpu(s, tk, c);
+                if (sv >= 0 && sv != quem) {
+                    char srv_rot[ID_MAX + 8], junto[2 * ID_MAX + 20];
+                    id_rotulo(e->tarefas[sv].id, todos_inteiros, srv_rot, sizeof srv_rot);
+                    snprintf(junto, sizeof junto, "%s(%s)", rot, srv_rot);
+                    if (texto_largura(junto) + 2 <= w && strlen(junto) < sizeof rot) memcpy(rot, junto, strlen(junto) + 1);
+                }
                 texto_no_meio(t, x, w, y, rot, cor_contraste(k->cor));
             }
             tk = t2;
@@ -1116,12 +1283,16 @@ int gantt_gfx_tarefa_em(const Simulador *s, const VistaGantt *v, int x, int y) {
 }
 
 /* Legenda: cada item é um símbolo + texto; quando não cabe na linha, quebra. */
-int gantt_gfx_legenda(Tela *t, int x, int y, int w, bool desenhar) {
+int gantt_gfx_legenda(Tela *t, int x, int y, int w, bool desenhar, bool servidores) {
     static const char *const textos[] = {
         "executando (nº da CPU)", "pronta", "suspensa", "CPU desligada", "chegada",
         "fim de ativação", "término (10ª ativação)", "perda de prazo", "sorteio (desempate)", "instante atual",
+        /* Projeto B: só aparecem se houver servidor */
+        "servidor executando", "aperiódica/esporádica executando (por um servidor)", "entrada do servidor",
+        "recarga da capacidade", "entrou no servidor", "capacidade descartada (PS)",
     };
     int n = (int)(sizeof textos / sizeof textos[0]);
+    if (!servidores) n = 10;
     int cx = x, cy = y;
     for (int i = 0; i < n; i++) {
         int larg = 36 + texto_largura(textos[i]) + 18;
@@ -1146,6 +1317,18 @@ int gantt_gfx_legenda(Tela *t, int x, int y, int w, bool desenhar) {
             case 7: xis_gfx(t, sx + 14, sy + 7); break;
             case 8: sorteio_gfx(t, sx + 14, sy + 7); break;
             case 9: tela_ret(t, sx + 13, sy - 1, 2, 16, C_AGORA); break;
+            case 10:
+                tela_listrado(t, sx, sy, 28, 14, 0x2ECC71);
+                tela_moldura(t, sx, sy, 28, 14, 0x222222);
+                break;
+            case 11:
+                tela_ret(t, sx, sy, 28, 14, 0xF39C12);
+                tela_moldura_grossa(t, sx, sy, 28, 14, 0x000000);
+                break;
+            case 12: entrada_servidor_gfx(t, sx + 14, sy + 1); break;
+            case 13: recarga_gfx(t, sx + 14, sy + 7); break;
+            case 14: atende_gfx(t, sx + 10, sy + 7); break;
+            case 15: descarte_gfx(t, sx + 14, sy + 7); break;
             }
             tela_texto(t, cx + 34, cy, textos[i], C_TEXTO);
         }

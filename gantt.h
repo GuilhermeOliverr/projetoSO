@@ -24,7 +24,13 @@ enum {
     M_TERMINO = 4,     // Bit 2 (4): Marcador de término definitivo da 10ª ativação (■)
     M_PRAZO = 8,     // Bit 3 (8): Marcador de perda de prazo / deadline miss (✗ em vermelho)
     M_SORTEIO = 16,    // Bit 4 (16): Marcador de sorteio no critério 5 de desempate (?)
+    /* Projeto B. Na linha de um servidor, M_CHEGADA é a ENTRADA dele (◆). */
+    M_RECARGA = 32,    // Bit 5 (32): recarga da capacidade de um servidor (+)
+    M_ATENDE = 64,     // Bit 6 (64): a aperiódica/esporádica entrou num servidor (»)
+    M_DESCARTE = 128,  // Bit 7 (128): o PS perdeu a capacidade por não ter aperiódica pendente (∅)
 };
+
+bool gantt_com_servidores(const Estado *e);    // true se há algum servidor: só então a legenda mostra os símbolos do Projeto B
 
 void gantt_mascaras(const Simulador *s, int ini, int fim, unsigned char *mask);      // Preenche a matriz de máscaras combinando os eventos ocorridos em cada célula (tarefa x tick) para a faixa [ini, fim)  
 
@@ -56,6 +62,6 @@ void gantt_gfx(struct Tela *t, const Simulador *s, VistaGantt *v);    // Renderi
 
 int gantt_gfx_tarefa_em(const Simulador *s, const VistaGantt *v, int x, int y);    // Calcula e retorna o índice da tarefa que está sob a posição do ponteiro do mouse (x, y)
 
-int gantt_gfx_legenda(struct Tela *t, int x, int y, int w, bool desenhar);    // Desenha o espaço da legenda de ícones (chegada, prazo, sorteio, CPUs) no rodapé da janela
+int gantt_gfx_legenda(struct Tela *t, int x, int y, int w, bool desenhar, bool servidores);    // Desenha a legenda de ícones (chegada, prazo, sorteio, CPUs e, se 'servidores', os do Projeto B) no rodapé da janela
 
 #endif
