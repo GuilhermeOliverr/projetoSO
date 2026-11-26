@@ -1,0 +1,12 @@
+# Servidor SS (Sporadic Server), parte B: figura 2.17 do capítulo (tempos x2).
+# C chega em 9 e executa em [9,10) e [12,13), porque A a interrompe em 10. O
+# intervalo ativo começou em 9, então os 2 ticks consumidos voltam em
+# RT = 9 + 20 = 29. D chega em 16, consome 2 e a recarga dela vem em 36.
+# U = 0,879 passa do limite de Liu & Layland (0,780), mas a análise de tempo
+# de resposta (seção 2.5) mostra que o conjunto é escalonável.
+RM;2;1
+A;E74C3C;0;2;10;10
+B;3498DB;0;12;28;28
+SS1;2ECC71;0;5;20;20
+C;F39C12;9;2;0
+D;9B59B6;16;2;0

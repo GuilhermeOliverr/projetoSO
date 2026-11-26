@@ -1,0 +1,11 @@
+# Servidor PS (Polling Server), parte B: figura 2.15 do capítulo, com os tempos
+# multiplicados por 2 (o simulador usa ticks inteiros). Em t = 0 não há
+# aperiódica e o PS perde a capacidade. C chega junto com o período (t = 10)
+# e executa na hora. D chega em 24, depois de o PS ter se suspendido em 20,
+# e só executa no período seguinte (t = 30).
+RM;2;1
+A;E74C3C;0;8;20;20
+B;3498DB;0;16;40;40
+PS1;2ECC71;0;2;10;10
+C;F39C12;10;2;0
+D;9B59B6;24;1;0

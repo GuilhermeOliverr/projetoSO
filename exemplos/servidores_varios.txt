@@ -1,0 +1,16 @@
+# Vários servidores ao mesmo tempo, parte B: PS, DS, SS e BS dividem uma única
+# fila FIFO de aperiódicas e esporádicas. O servidor que pega uma tarefa fica
+# com ela (inacessível para os outros, req. 2.2) até ela terminar ou até a
+# capacidade dele acabar, quando ela volta para a fila e outro a continua.
+# X, Y e W são aperiódicas, Z é esporádica (intervalo mínimo 10).
+RM;2;1
+A;E74C3C;0;2;10;10
+B;3498DB;0;4;20;20
+PS1;2ECC71;0;1;5;5
+DS1;F39C12;0;1;8;8
+SS1;9B59B6;0;2;20;20
+BS1;34495E;0;1;0
+X;E67E22;1;2;0
+Y;E84393;2;1;0
+Z;16A085;0;1;-10;10;0,10,25
+W;8E44AD;30;3;0

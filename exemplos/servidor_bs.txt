@@ -1,0 +1,11 @@
+# Servidor BS (Background Server), parte B: ele só usa a CPU que as periódicas
+# deixam livre. A (C=4, P=10) e B (C=8, P=20) usam 80% da CPU, então as
+# aperiódicas C e D e a esporádica E só executam nos buracos, em ordem de
+# chegada (FIFO): E (chegou em 0), C (em 3) e D (em 5).
+RM;2;1
+A;E74C3C;0;4;10;10
+B;3498DB;0;8;20;20
+BS1;2ECC71;0;1;0
+C;F39C12;3;2;0
+D;9B59B6;5;1;0
+E;1ABC9C;0;2;-20;20;0,20,40

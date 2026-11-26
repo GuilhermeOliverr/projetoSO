@@ -1,0 +1,10 @@
+# Servidor DS (Deferrable Server), parte B: as mesmas chegadas da figura 2.16
+# (tempos x2), mas com a carga periódica pela metade, porque a da figura não
+# passa no teste do DS (eq. [19] do capítulo). Ao contrário do PS, o DS guarda
+# a capacidade: D chega em 24 e executa na hora, sem esperar o próximo período.
+RM;2;1
+A;E74C3C;0;4;20;20
+B;3498DB;0;8;40;40
+DS1;2ECC71;0;2;10;10
+C;F39C12;10;2;0
+D;9B59B6;24;1;0

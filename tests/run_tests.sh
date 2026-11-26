@@ -87,6 +87,49 @@ grep -q 'tarefa X impedida de ser escalonada: com ela a utilização seria U = 1
     && ok "tarefa adicionada no passo a passo também passa pelo teste (U = 1,252, e a análise de tempo de resposta confirma)" \
     || falha "teste ao adicionar tarefa" "$(grep -i impedida "$TMP/out" | head -1)"
 
+echo "== Servidores (parte B): um caso por servidor e um com vários"
+# Os cinco arquivos estão em exemplos/ e passam no teste de escalonabilidade
+# sem --sem-teste. PS e SS são as figuras 2.15 e 2.17 com os tempos x2.
+for f in servidor_bs servidor_ps servidor_ds servidor_ss servidores_varios; do
+    roda_b exemplos/$f.txt > "$TMP/out"
+    grep -q 'impedida' "$TMP/out" && falha "exemplos/$f.txt: nenhuma tarefa deveria ser impedida" \
+        || ok "exemplos/$f.txt: todas as tarefas passam no teste de escalonabilidade"
+done
+roda_b exemplos/servidor_bs.txt > "$TMP/out"
+grep -q 'CPU0: \[0,4)A \[4,10)B \[10,14)A \[14,16)B \[16,18)E(BS1) \[18,20)C(BS1) \[20,24)A' "$TMP/out" \
+    && grep -q '\[36,37)D(BS1) \[37,39)E(BS1)' "$TMP/out" \
+    && ok "BS: só executa na CPU livre, em ordem de chegada (E, C, D)" \
+    || falha "servidor BS" "$(grep 'CPU0:' "$TMP/out" | cut -c1-120)"
+roda_b exemplos/servidor_ps.txt > "$TMP/out"
+grep -q 'CPU0: \[0,8)A \[8,10)B \[10,12)C(PS1) \[12,20)B \[20,28)A \[28,30)B \[30,31)D(PS1)' "$TMP/out" \
+    && grep -q 't=0 PS1 capacidade descartada' "$TMP/out" && grep -q 't=20 PS1 capacidade descartada' "$TMP/out" \
+    && ok "PS (figura 2.15): perde a capacidade sem pendência, D espera até t = 30" \
+    || falha "servidor PS" "$(grep 'CPU0:' "$TMP/out" | cut -c1-120)"
+roda_b exemplos/servidor_ds.txt > "$TMP/out"
+grep -q '\[10,12)C(DS1)' "$TMP/out" && grep -q '\[24,25)D(DS1)' "$TMP/out" \
+    && ok "DS: guarda a capacidade e atende D na hora, em t = 24" \
+    || falha "servidor DS" "$(grep 'CPU0:' "$TMP/out" | cut -c1-120)"
+roda_b exemplos/servidor_ss.txt > "$TMP/out"
+grep -q 'CPU0: \[0,2)A \[2,9)B \[9,10)C(SS1) \[10,12)A \[12,13)C(SS1) \[13,16)B \[16,18)D(SS1)' "$TMP/out" \
+    && grep -q 't=29 SS1 recarga da capacidade (2 tick(s))' "$TMP/out" \
+    && grep -q 't=36 SS1 recarga da capacidade (2 tick(s))' "$TMP/out" \
+    && ok "SS (figura 2.17): recargas em RT = 9 + 20 = 29 e 16 + 20 = 36" \
+    || falha "servidor SS" "$(grep -E 'CPU0:|SS1 recarga' "$TMP/out" | cut -c1-120)"
+roda_b exemplos/servidores_varios.txt > "$TMP/out"
+grep -q 't=1 X entrou no servidor DS1' "$TMP/out" && grep -q 't=4 X entrou no servidor SS1' "$TMP/out" \
+    && ok "vários servidores: X volta para a fila quando o DS1 fica sem capacidade e o SS1 a continua" \
+    || falha "vários servidores: troca de servidor" "$(grep 'entrou no servidor' "$TMP/out" | head -3 | tr '\n' ' ')"
+grep -q '\[30,31)W(PS1) \[31,33)W(DS1)' "$TMP/out" && ok "vários servidores: W começa no PS1 e termina no DS1" \
+    || falha "vários servidores: W" "$(grep 'CPU0:' "$TMP/out" | cut -c1-160)"
+grep -q 'class="listras"' "$TMP/g.svg" && grep -q 'class="aper"' "$TMP/g.svg" && grep -q 'class="srv-entrada"' "$TMP/g.svg" \
+    && ok "SVG: servidor listrado, aperiódica com borda tracejada e entrada do servidor marcada" \
+    || falha "desenho dos servidores no SVG"
+roda_b tests/validos/27_esporadica_intervalo_minimo.txt > "$TMP/out"
+grep -q 'tarefa esporádica E ignorada: as ocorrências 0 e 5 estão a 5 tick(s) uma da outra, menos que o intervalo mínimo' "$TMP/out" \
+    && grep -q 'tarefa esporádica F: 3 ocorrência(s)' "$TMP/out" \
+    && ok "esporádica que viola o intervalo mínimo é ignorada com aviso e o resto carrega" \
+    || falha "intervalo mínimo na carga" "$(grep -E 'E ignorada|F:' "$TMP/out" | head -2)"
+
 echo "== Inserção manual (parte B): seletor de tipo e a mesma linha de um .txt"
 printf 'RM;2;1\n1;E74C3C;0;2;10;10\nPS1;2ECC71;0;2;5;5\n' > "$TMP/srv.txt"
 # n -> e (esporádica): id E, cor, ingresso, C = 1, intervalo mínimo 5, prazo,
