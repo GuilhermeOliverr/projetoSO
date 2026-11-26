@@ -360,7 +360,8 @@ bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char
             int quem = sim_ocupante_cpu(s, t, c);
             bool existe = c < s->ncpus_col[t];
             int t2 = t + 1;
-            while (t2 < T && (c < s->ncpus_col[t2]) == existe && sim_ocupante_cpu(s, t2, c) == quem) t2++;
+            while (t2 < T && (c < s->ncpus_col[t2]) == existe && sim_ocupante_cpu(s, t2, c) == quem
+                   && sim_servidor_cpu(s, t2, c) == sim_servidor_cpu(s, t, c)) t2++;   /* trecho muda se o servidor muda */
             int x = margem + t * cw, w = (t2 - t) * cw;
             if (!existe) {
                 /* CPU não existia nestes ticks (quantidade alterada em edição) */
@@ -963,13 +964,14 @@ void gantt_texto(const Simulador *s) {
         for (int t = 0; t < s->ncols;) {
             int i = oc[t * MAX_CPUS + c];
             int t2 = t;
-            while (t2 < s->ncols && oc[t2 * MAX_CPUS + c] == i) t2++;
+            /* o trecho também acaba quando outro servidor passa a executar a mesma aperiódica */
+            while (t2 < s->ncols && oc[t2 * MAX_CPUS + c] == i && sim_servidor_cpu(s, t2, c) == sim_servidor_cpu(s, t, c)) t2++;
             if (i >= 0) {
                 id_rotulo(e->tarefas[i].id, todos_inteiros, rot, sizeof rot);
                 printf(" [%d,%d)%s", t, t2, rot);
                 /* aperiódica executada por um servidor: "[10,12)C(PS1)". O
-                 * trecho é o mesmo porque o servidor fica com ela até o fim
-                 * (ou até ser preemptado, o que também muda o ocupante). */
+                 * trecho acima já para quando o servidor muda (ex.: a
+                 * capacidade do PS acabou e o DS continuou a mesma tarefa). */
                 int sv = sim_servidor_cpu(s, t, c);
                 if (sv >= 0 && sv != i) {
                     id_rotulo(e->tarefas[sv].id, todos_inteiros, rot, sizeof rot);
@@ -1235,7 +1237,8 @@ void gantt_gfx(Tela *t, const Simulador *s, VistaGantt *v) {
             int quem = sim_ocupante_cpu(s, tk, c);
             bool existe = c < s->ncpus_col[tk];
             int t2 = tk + 1;
-            while (t2 < t_fim && (c < s->ncpus_col[t2]) == existe && sim_ocupante_cpu(s, t2, c) == quem) t2++;
+            while (t2 < t_fim && (c < s->ncpus_col[t2]) == existe && sim_ocupante_cpu(s, t2, c) == quem
+                   && sim_servidor_cpu(s, t2, c) == sim_servidor_cpu(s, tk, c)) t2++;   /* trecho muda se o servidor muda */
             int x = x0 + (tk - v->t_ini) * v->cw, w = (t2 - tk) * v->cw;
             if (!existe) {
                 /* a CPU não existia (quantidade alterada durante a simulação) */

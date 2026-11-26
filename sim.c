@@ -251,8 +251,11 @@ static void iniciar_ativacao(TCB *k, int agora) {
  *     prazo) e com a mesma cadeia de desempate (req. 4.3). Só que ele só
  *     disputa quando TEM capacidade E TEM o que executar;
  *   - quando um servidor ganha a CPU sem estar com nenhuma aperiódica, ele
- *     tira a primeira da fila e fica com ela até ela terminar: ela passa a
- *     ser inacessível para os outros servidores (req. 2.2 da parte B);
+ *     tira a primeira da fila e fica com ela: ela passa a ser inacessível
+ *     para os outros servidores (req. 2.2 da parte B), mesmo enquanto ele é
+ *     preemptado. Ele só a larga quando ela termina a ativação ou quando a
+ *     capacidade dele acaba; aí ela volta para a fila, no lugar dela (a
+ *     ordem é pela chegada), e outro servidor pode continuá-la;
  *   - executar 1 tick do servidor gasta 1 da capacidade dele e 1 do
  *     `restante` da aperiódica. No Gantt as duas linhas mostram a execução,
  *     cada uma com o seu desenho (req. 4 da parte B);
@@ -462,7 +465,14 @@ static bool preparar_servidores(Simulador *s) {
         TCB *k = &e->tarefas[i];
         if (!tcb_eh_servidor(k) || k->atendendo < 0) continue;
         TCB *a = &e->tarefas[k->atendendo];
-        if (servidor_ativo(k) && a->restante > 0 && a->estado != T_TERMINADA && !suspensa_pelo_usuario(a)) continue;
+        /* Também larga quando a capacidade acaba: a tarefa volta para a fila
+         * (no lugar dela, que é pela chegada) e outro servidor pode
+         * continuá-la. Ela é inacessível aos outros enquanto ESTE servidor
+         * pode executá-la; sem isso, ficaria presa a um servidor sem
+         * capacidade com outro (ex.: o BS) e a CPU livres. */
+        bool pode = k->srv == SRV_BS || k->capacidade > 0;
+        if (servidor_ativo(k) && pode && a->restante > 0 && a->estado != T_TERMINADA && !suspensa_pelo_usuario(a))
+            continue;
         if (a->estado == T_EXECUTANDO) {
             a->estado = T_PRONTA;
             a->cpu = -1;
