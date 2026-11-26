@@ -1197,21 +1197,30 @@ double sim_utilizacao(const Estado *e) {
     return u;
 }
 
-/* Limite do teste suficiente do RM (Liu & Layland): U <= n(2^(1/n) - 1).
- * Se U está abaixo do limite, o RM garante escalonar; acima, não garante
- * (mas ainda pode funcionar). */
-double sim_limite_rm(int n) {
-    if (n <= 0) return 1.0;
-    /* 2^(1/n) por bissecção: x^n = 2 com x em [1, 2]. Evita depender da
-     * libm só por causa de uma conta. */
-    double lo = 1.0, hi = 2.0;
-    for (int it = 0; it < 60; it++) {
-        double m = (lo + hi) / 2, p = 1.0;
-        for (int k = 0; k < n; k++) p *= m;
-        if (p < 2.0) lo = m;
-        else hi = m;
+/* As tarefas do estado atual no formato do teste de escalonabilidade (ver
+ * teste_calcular em config.c). As que já terminaram ficam de fora: não usam
+ * mais CPU, então não pesam para uma tarefa nova que entra agora. O limite do
+ * RM (que ficava aqui como sim_limite_rm) passou para limite_rm, em config.c,
+ * porque o teste também roda na carga do arquivo. */
+ItemTeste *sim_itens_teste(const Estado *e, int *n) {
+    ItemTeste *v = xmalloc((size_t)(e->n ? e->n : 1) * sizeof *v);
+    int m = 0;
+    for (int i = 0; i < e->n; i++) {
+        const TCB *k = &e->tarefas[i];
+        if (k->estado != T_TERMINADA) v[m++] = (ItemTeste){k->tipo, k->srv, k->duracao, k->periodo};
     }
-    return n * (lo - 1.0);
+    *n = m;
+    return v;
+}
+
+/* Teste para a tarefa `t` entrar durante a simulação ("+ tarefa"), contra
+ * as que ainda não terminaram, com o algoritmo e as CPUs do instante atual. */
+const char *sim_admitir_tarefa(const Estado *e, const TarefaCfg *t, char *buf, size_t tam) {
+    int n;
+    ItemTeste *v = sim_itens_teste(e, &n);
+    const char *m = teste_admitir(v, n, (ItemTeste){t->tipo, t->srv, t->duracao, t->periodo}, e->alg, e->ncpus, buf, tam);
+    free(v);
+    return m;
 }
 
 /* ===========================================================================

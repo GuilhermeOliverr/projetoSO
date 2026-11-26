@@ -141,6 +141,46 @@ const char *config_intervalo_minimo(const int *oc, int n, int minimo, char *buf,
 // Monta a linha do arquivo de configuração de uma tarefa (id;cor;ingresso;duracao;periodo;prazo;lista_eventos), como no .txt
 void config_linha_tarefa(const TarefaCfg *t, char *buf, size_t tam);
 
+/* --- Teste de escalonabilidade (req. 3 da parte B) ------------------------
+ * Roda antes de uma tarefa ser aceita: ao carregar o arquivo e ao adicionar
+ * uma tarefa pela interface. Só olha o que a tarefa "pesa", então serve
+ * tanto para a configuração (TarefaCfg) quanto para a simulação (TCB). */
+typedef struct {
+    TipoTarefa tipo;
+    TipoServidor srv;
+    int duracao, periodo;
+} ItemTeste;
+
+/* Resultado do teste para um conjunto de tarefas. */
+typedef struct {
+    double u;          // utilização das periódicas e dos servidores PS/DS/SS (soma de C/P)
+    double limite;     // limite do teste para o algoritmo e a quantidade de CPUs
+    double u_esp;      // carga das esporádicas no pior caso (soma de C/intervalo mínimo)
+    double banda;      // quanto os servidores oferecem às aperiódicas/esporádicas
+    int nservidores;   // quantos servidores existem (de qualquer tipo)
+    char regra[160];   // de onde vem o limite (ex.: "RM, 1 CPU: n(2^(1/n)-1) com n = 3")
+} ResultadoTeste;
+
+extern bool g_teste_escalonabilidade;   // false com --sem-teste: só a regra "aperiódica precisa de servidor" continua valendo
+
+// Limite do RM com n tarefas e servidores DS de utilização total u_ds: n((u_ds+2)/(2u_ds+1))^(1/n) - n (+ u_ds); com u_ds = 0 é Liu & Layland
+double limite_rm(int n, double u_ds);
+
+// Calcula U, limite, carga das esporádicas e banda dos servidores para as 'n' tarefas de 'v'
+void teste_calcular(const ItemTeste *v, int n, int alg, int ncpus, ResultadoTeste *r);
+
+// NULL se a tarefa 'nova' pode entrar junto com as 'n' já aceitas; senão o motivo em 'buf' (com U, limite e algoritmo)
+const char *teste_admitir(const ItemTeste *aceitas, int n, ItemTeste nova, int alg, int ncpus, char *buf, size_t tam);
+
+// Uma linha com o resultado do teste para o conjunto (para as telas de configuração e de sistema)
+void teste_resumo(const ItemTeste *v, int n, int alg, int ncpus, char *buf, size_t tam);
+
+// As tarefas da configuração no formato do teste (vetor de cfg->n itens; quem chama libera)
+ItemTeste *config_itens_teste(const Config *cfg);
+
+// Teste para a tarefa 't' entrar na configuração: NULL se pode, ou o motivo em 'buf'
+const char *config_admitir_tarefa(const Config *cfg, const TarefaCfg *t, char *buf, size_t tam);
+
 const char *config_validar_quantum(int v);    // Valida se o quantum informado é maior que 0
 const char *config_validar_cpus(int v);    // Valida se o número de CPUs está dentro do intervalo permitido (1 a MAX_CPUS)
 

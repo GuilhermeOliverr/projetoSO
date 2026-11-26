@@ -49,8 +49,13 @@ for f in tests/nao_existe.txt tests; do
     fi
 done
 
-# Executa em modo completo e devolve a saída em texto.
-roda() { $BIN "$1" --modo completo --texto --sem-cor --saida "$TMP/g.svg" ${2:+"$@"} 2>&1; }
+# Executa em modo completo e devolve a saída em texto. Os testes do Projeto A
+# conferem a mecânica do escalonador com conjuntos sobrecarregados de
+# propósito (ex.: figura 2.6 com RM, U = 100%), então rodam com --sem-teste:
+# sem ele, o teste de escalonabilidade da parte B recusaria a tarefa que
+# provoca a sobrecarga. Os testes da parte B usam roda_b, com o teste ligado.
+roda() { $BIN "$1" --modo completo --texto --sem-cor --sem-teste --saida "$TMP/g.svg" ${2:+"$@"} 2>&1; }
+roda_b() { $BIN "$1" --modo completo --texto --sem-cor --saida "$TMP/g.svg" 2>&1; }
 
 echo "== Avisos"
 # Projeto B: a aperiódica só executa por um servidor; sem nenhum servidor no
@@ -60,6 +65,26 @@ grep -q 'tarefa 2 impedida de ser escalonada: é aperiódica e não há nenhum s
     && ok "aperiódica sem servidor: impedida de ser escalonada, com aviso" \
     || falha "aperiódica sem servidor deveria ser impedida com aviso"
 grep -q 'T2' "$TMP/out" && falha "aperiódica não deveria aparecer no Gantt" || ok "aperiódica fora do Gantt"
+
+echo "== Teste de escalonabilidade antes de aceitar a tarefa (parte B, req. 3)"
+# Figura 2.6 com RM: U = 0,5 + 0,5 = 1,0 passa do limite de Liu & Layland
+# para n = 2 (0,828). A tarefa 2 é impedida, com U, limite e algoritmo.
+roda_b exemplos/fig2_6_rm.txt > "$TMP/out"
+grep -q 'tarefa 2 impedida de ser escalonada: com ela a utilização seria U = 1.000, acima do limite 0.828 (RM.*algoritmo RM' "$TMP/out" \
+    && ok "RM, U = 1,000 > 0,828: tarefa 2 impedida, com U, limite e algoritmo no aviso" \
+    || falha "teste de escalonabilidade do RM" "$(grep impedida "$TMP/out" | head -1)"
+roda_b exemplos/fig2_6_edf.txt > "$TMP/out"
+grep -q 'impedida' "$TMP/out" && falha "EDF com U = 1 deveria passar (U <= 1)" || ok "EDF, U = 1,000 <= 1: as duas tarefas aceitas"
+roda exemplos/fig2_6_rm.txt > "$TMP/out"
+grep -q 'impedida' "$TMP/out" && falha "--sem-teste deveria aceitar todas" || ok "--sem-teste aceita todas (sobrecarga do Projeto A)"
+roda_b tests/validos/26_esporadica_acima_da_capacidade.txt > "$TMP/out"
+grep -q 'tarefa E impedida de ser escalonada: as esporádicas pediriam, no pior caso, U = 0.600.*limite = 0.100' "$TMP/out" \
+    && ok "esporádica que pede mais (3/5) do que o servidor oferece (1/10) é impedida" \
+    || falha "teste da esporádica contra a capacidade dos servidores" "$(grep impedida "$TMP/out" | head -1)"
+printf '+\nX\n\n\n\n\n\n\nq\n' | $BIN exemplos/fig2_5_rm.txt --modo passo --sem-cor > "$TMP/out" 2>&1
+grep -q 'tarefa X impedida de ser escalonada: com ela a utilização seria U = 0.952' "$TMP/out" \
+    && ok "tarefa adicionada no passo a passo também passa pelo teste (U 0,952 > 0,757)" \
+    || falha "teste ao adicionar tarefa" "$(grep -i impedida "$TMP/out" | head -1)"
 
 echo "== Figura 2.5 (tabela 2.1 com RM)"
 roda exemplos/fig2_5_rm.txt > "$TMP/out"
@@ -125,13 +150,13 @@ cmp -s "$TMP/a" "$TMP/b" && ok "mesma semente, mesmo resultado" || falha "determ
 
 echo "== Passo a passo: avançar/retroceder e edição"
 printf 'g 60\nx %s/ida.svg\ng 150\np 50\np 40\nx %s/volta.svg\nq\n' "$TMP" "$TMP" \
-    | $BIN exemplos/fig2_5_rm.txt --modo passo --sem-cor > "$TMP/out" 2>&1
+    | $BIN exemplos/fig2_5_rm.txt --modo passo --sem-teste --sem-cor > "$TMP/out" 2>&1
 cmp -s "$TMP/ida.svg" "$TMP/volta.svg" && ok "voltar para t = 60 reproduz exatamente o mesmo Gantt" \
     || falha "retroceder deveria reproduzir o estado"
-printf 'g 30\ne 1\n6\n0\n5\nq\n' | $BIN exemplos/fig2_6_rm.txt --modo passo --sem-cor > "$TMP/out" 2>&1
+printf 'g 30\ne 1\n6\n0\n5\nq\n' | $BIN exemplos/fig2_6_rm.txt --modo passo --sem-teste --sem-cor > "$TMP/out" 2>&1
 grep -q 'não tem ativação em andamento' "$TMP/out" && ok "edição inválida recusada com motivo" \
     || falha "edição inválida deveria ser recusada"
-printf 'g 25\ne 2\n7\nn 10\nt 2\nq\n' | $BIN exemplos/fig2_6_rm.txt --modo passo --sem-cor > "$TMP/out" 2>&1
+printf 'g 25\ne 2\n7\nn 10\nt 2\nq\n' | $BIN exemplos/fig2_6_rm.txt --modo passo --sem-teste --sem-cor > "$TMP/out" 2>&1
 grep -q 'suspensa 10 tick' "$TMP/out" && grep -q '░' "$TMP/out" && ok "suspensão aparece no estado e no Gantt" \
     || falha "suspensão"
 
@@ -139,18 +164,18 @@ echo "== Suspensão por período x suspensão pelo usuário (SUSP_PERIODO / SUSP
 # T1 (fig. 2.5) acaba em t = 20 e só chega de novo em t = 100: nesse intervalo
 # ela está suspensa por período. Não é a suspensão do usuário, então não conta
 # como tick suspenso e não pode aparecer pontilhada no Gantt.
-printf 'g 30\nt 1\nf\nq\n' | $BIN exemplos/fig2_5_rm.txt --modo passo --sem-cor > "$TMP/out" 2>&1
+printf 'g 30\nt 1\nf\nq\n' | $BIN exemplos/fig2_5_rm.txt --modo passo --sem-teste --sem-cor > "$TMP/out" 2>&1
 grep -q 'estado: suspensa: próximo período' "$TMP/out" && grep -q 'suspensa 0 tick(s)' "$TMP/out" \
     && ok "esperar o período = suspensa: próximo período, sem contar tick suspenso" \
     || falha "estado SUSP_PERIODO" "$(grep 'estado:' "$TMP/out" | head -2)"
 grep -v 'Legenda' "$TMP/out" | grep -q '░' && falha "esperar o período não pode ser pontilhado no Gantt" \
     || ok "esperar o período fica vazio no Gantt (como nas figuras do capítulo)"
 # A próxima ativação (t = 100) tira a tarefa da suspensão sozinha.
-printf 'g 101\nt 1\nq\n' | $BIN exemplos/fig2_5_rm.txt --modo passo --sem-cor > "$TMP/out" 2>&1
+printf 'g 101\nt 1\nq\n' | $BIN exemplos/fig2_5_rm.txt --modo passo --sem-teste --sem-cor > "$TMP/out" 2>&1
 grep -q 'estado: executando' "$TMP/out" && ok "a chegada da próxima ativação encerra a suspensão por período" \
     || falha "SUSP_PERIODO deveria acabar sozinha" "$(grep 'estado:' "$TMP/out" | head -2)"
 # Suspensa pelo usuário em t = 30: a chegada em t = 100 NÃO a libera; só a retomada.
-printf 'g 30\ne 1\n7\ng 110\nt 1\n\ne 1\n7\nq\n' | $BIN exemplos/fig2_5_rm.txt --modo passo --sem-cor > "$TMP/out" 2>&1
+printf 'g 30\ne 1\n7\ng 110\nt 1\n\ne 1\n7\nq\n' | $BIN exemplos/fig2_5_rm.txt --modo passo --sem-teste --sem-cor > "$TMP/out" 2>&1
 grep -q 'estado: suspensa: pelo usuário' "$TMP/out" && grep -q 'suspensa [1-9][0-9]* tick(s)' "$TMP/out" \
     && ok "suspensão do usuário sobrevive à chegada da ativação e conta ticks" \
     || falha "SUSP_USUARIO não pode ser desfeita pela chegada" "$(grep 'estado:' "$TMP/out" | head -2)"
@@ -193,13 +218,13 @@ grep -q 'id \[4\]' "$TMP/out" && ok "sugestão com ids 1, 2, 3: 4" || falha "sug
 printf 'n\n\n\n\n\n\n\n\nq\n' | $BIN tests/validos/21_ids_texto_ordem_natural.txt --terminal --sem-cor > "$TMP/out" 2>&1
 grep -q 'id \[T11\]' "$TMP/out" && ok "sugestão com T0, T1, T2, T10: T11" || falha "sugestão de id texto"
 # Comandos com id em texto: t t0 acha T0; t 0 e t T0 são tarefas diferentes.
-printf 't t0\n\nq\n' | $BIN tests/validos/21_ids_texto_ordem_natural.txt --modo passo --sem-cor > "$TMP/out" 2>&1
+printf 't t0\n\nq\n' | $BIN tests/validos/21_ids_texto_ordem_natural.txt --modo passo --sem-teste --sem-cor > "$TMP/out" 2>&1
 grep -q 'Tarefa T0 (TCB)' "$TMP/out" && ok "'t t0' acha a tarefa T0" || falha "busca sem diferenciar maiúsculas"
-printf 't 0\n\nt T0\n\nq\n' | $BIN tests/validos/22_ids_misturados_0_e_T0.txt --modo passo --sem-cor > "$TMP/out" 2>&1
+printf 't 0\n\nt T0\n\nq\n' | $BIN tests/validos/22_ids_misturados_0_e_T0.txt --modo passo --sem-teste --sem-cor > "$TMP/out" 2>&1
 grep -q 'Tarefa 0 (TCB)' "$TMP/out" && grep -q 'Tarefa T0 (TCB)' "$TMP/out" && ok "'t 0' e 't T0' são tarefas diferentes" \
     || falha "'t 0' / 't T0'"
 # Tarefa de id texto adicionada na simulação some ao voltar para antes dela.
-printf 'n 5\n+\nX\n\n\n\n\n\n\nt X\n\np 3\nt X\nq\n' | $BIN exemplos/fig2_5_rm.txt --modo passo --sem-cor > "$TMP/out" 2>&1
+printf 'n 5\n+\nX\n\n\n\n\n\n\nt X\n\np 3\nt X\nq\n' | $BIN exemplos/fig2_5_rm.txt --modo passo --sem-teste --sem-cor > "$TMP/out" 2>&1
 grep -q 'Tarefa X adicionada' "$TMP/out" && grep -q 'Tarefa X (TCB)' "$TMP/out" \
     && grep -q 'não existe tarefa com id X neste instante' "$TMP/out" \
     && ok "tarefa 'X' adicionada no passo a passo e desfeita ao voltar no tempo" || falha "adicionar tarefa de id texto"

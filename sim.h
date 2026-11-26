@@ -129,7 +129,8 @@ int sim_indice(const Estado *e, const char *id);    // Busca o índice da tarefa
 bool sim_ids_inteiros(const Estado *e);    // true se todos os ids do estado atual são inteiros (rótulos "T<id>"; ver id_rotulo)
 
 double sim_utilizacao(const Estado *e);    // Utilização U = soma(C/P) das periódicas e dos servidores PS/DS/SS (ver tarefa_utilizacao)
-double sim_limite_rm(int n);    // Calcula o limite teórico de escalonabilidade do teste de Liu & Layland para RM: n*(2^(1/n) - 1)
+ItemTeste *sim_itens_teste(const Estado *e, int *n);    // Tarefas ainda não terminadas no formato do teste de escalonabilidade (quem chama libera); *n = quantas
+const char *sim_admitir_tarefa(const Estado *e, const TarefaCfg *t, char *buf, size_t tam);    // Teste para a tarefa 't' entrar agora na simulação: NULL se pode, ou o motivo em 'buf'
 
 void estado_copiar(Estado *dst, const Estado *src);    // Copia profundamente o estado 'src' para o estado 'dst' (alocando novos TCBs)
 void estado_liberar(Estado *e);    // Libera a memória alocada para os TCBs internos da estrutura Estado

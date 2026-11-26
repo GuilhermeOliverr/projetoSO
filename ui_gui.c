@@ -863,20 +863,12 @@ static bool form_tarefa(const char *titulo, TarefaCfg *t, const char *const *ids
     return true;
 }
 
-/* Texto da utilização e do teste de escalonabilidade (como no terminal). */
-static void linhas_utilizacao(Linhas *L, int n, double u, int alg) {
-    const Escalonador *e = sched_obter(alg);
-    if (e && str_ieq(e->nome, "RM")) {
-        double lim = sim_limite_rm(n);
-        lin_add(L, C_TEXTO, false, "Utilização U = soma(C/P) = %.3f | teste suficiente do RM: U <= n(2^(1/n)-1) = %.3f -> %s",
-                u, lim, u <= lim ? "escalonável (1 CPU)" : "inconclusivo (pode perder prazos)");
-    } else if (e && str_ieq(e->nome, "EDF")) {
-        lin_add(L, C_TEXTO, false, "Utilização U = soma(C/P) = %.3f | EDF (prazo = período): escalonável em 1 CPU sse U <= 1 -> %s",
-                u, u <= 1.0 ? "sim" : "não");
-    } else {
-        lin_add(L, C_TEXTO, false, "Utilização U = soma(C/P) = %.3f", u);
-    }
-    lin_add(L, C_FRACO, false, "(os testes valem para 1 CPU; com mais CPUs são só uma referência)");
+/* Texto do teste de escalonabilidade (req. 3 da parte B), como no terminal:
+ * U, o limite e de onde ele vem (ver teste_calcular em config.c). */
+static void linhas_teste(Linhas *L, const ItemTeste *v, int n, int alg, int ncpus) {
+    char buf[700];
+    teste_resumo(v, n, alg, ncpus, buf, sizeof buf);
+    lin_add(L, C_TEXTO, false, "%s", buf);
 }
 
 /* ============================================ 3. escolha do arquivo */
@@ -1343,10 +1335,9 @@ static int tela_config(Config *cfg) {
 
         /* tarefas */
         Linhas util = {0};
-        double u = 0;
-        for (int i = 0; i < cfg->n; i++)
-            u += tarefa_utilizacao(cfg->tarefas[i].tipo, cfg->tarefas[i].srv, cfg->tarefas[i].duracao, cfg->tarefas[i].periodo);
-        linhas_utilizacao(&util, cfg->n, u, cfg->algoritmo);
+        ItemTeste *itens = config_itens_teste(cfg);
+        linhas_teste(&util, itens, cfg->n, cfg->algoritmo, cfg->ncpus);
+        free(itens);
         int h_util = linhas_visuais(&util, w - 24) * LINHA + 10;
         /* avisos do arquivo (ex.: eventos lidos e guardados), com
          * quebra de linha; até 6 linhas, o resto rola com a roda do mouse */
@@ -1481,8 +1472,14 @@ static int tela_config(Config *cfg) {
             id_sugerir(ids, cfg->n, t.id, sizeof t.id);
             char ev_txt[512];
             if (form_tarefa("Nova tarefa", &t, ids, cfg->n, -1, 0, ev_txt, sizeof ev_txt)) {
-                config_adicionar(cfg, &t);
-                fmsg(msg, sizeof msg, "Tarefa %s adicionada.", t.id);
+                /* Req. 3 da parte B: o teste de escalonabilidade vem antes de aceitar. */
+                char motivo[700];
+                if (config_admitir_tarefa(cfg, &t, motivo, sizeof motivo)) {
+                    fmsg(msg, sizeof msg, "erro: tarefa %s impedida de ser escalonada: %s", t.id, motivo);
+                } else {
+                    config_adicionar(cfg, &t);
+                    fmsg(msg, sizeof msg, "Tarefa %s adicionada.", t.id);
+                }
             }
             free(ids);
             break;
@@ -1661,19 +1658,24 @@ static void linhas_sistema(const Sessao *z, Linhas *L) {
     lin_add(L, C_TEXTO, true, "Sistema no instante %d: %s", e->t,
             e->fim ? "simulação concluída" : sim_bloqueado(e) ? "bloqueada (todas as restantes suspensas)" : "em andamento");
     lin_add(L, C_TEXTO, false, "Algoritmo %s | quantum %d | %d CPU(s)", esc->nome, e->quantum, e->ncpus);
-    linhas_utilizacao(L, e->n, sim_utilizacao(e), e->alg);
+    int nv;
+    ItemTeste *itens = sim_itens_teste(e, &nv);
+    linhas_teste(L, itens, nv, e->alg, e->ncpus);
+    free(itens);
     lin_add(L, C_FRACO, true, "  %6s  %-27s %6s %8s %8s %4s %6s", "id", "estado", "ativ.", "restante", "deadline", "CPU", "prazos");
     int *ordem = gantt_ordem(e);
     for (int r = e->n - 1; r >= 0; r--) {
         const TCB *k = &e->tarefas[ordem[r]];
         char rest[16] = "-", dl[16] = "-", cpu[16] = "-";
-        if (k->restante > 0) {
+        if (k->restante > 0 && !tcb_eh_servidor(k)) {   /* o servidor mostra a capacidade em "ativ." */
             snprintf(rest, sizeof rest, "%d", k->restante);
             snprintf(dl, sizeof dl, "%d", k->deadline_abs);
         }
         if (k->cpu >= 0) snprintf(cpu, sizeof cpu, "%d", k->cpu);
-        lin_add(L, k->deadlines_perdidos ? C_ERRO : C_TEXTO, false, "%*s%s  %-27s %3d/%-2d %8s %8s %4s %6d", folga(k->id, 6), "", k->id,
-                estado_descricao(k), k->concluidas, MAX_ATIVACOES, rest, dl, cpu, k->deadlines_perdidos);
+        char ativ[24];
+        tcb_texto_ativacoes(k, ativ, sizeof ativ);   /* "3/10", "1/1" ou a capacidade do servidor */
+        lin_add(L, k->deadlines_perdidos ? C_ERRO : C_TEXTO, false, "%*s%s  %-27s %s %8s %8s %4s %6d", folga(k->id, 6), "", k->id,
+                estado_descricao(k), ativ, rest, dl, cpu, k->deadlines_perdidos);
         L->v[L->n - 1].amostra = k->cor;
     }
     free(ordem);
@@ -1692,7 +1694,9 @@ static void linhas_estatisticas(const Simulador *s, Linhas *L) {
         perdidos += k->deadlines_perdidos;
         char term[16] = "-";
         if (k->termino >= 0) snprintf(term, sizeof term, "%d", k->termino);
-        lin_add(L, C_TEXTO, false, "%*s%s %4d/%-2d %7d %7d %7d %8.1f %8d %6d %7d %7s", folga(k->id, 6), "", k->id, k->concluidas, MAX_ATIVACOES,
+        char ativ[24];
+        tcb_texto_ativacoes(k, ativ, sizeof ativ);
+        lin_add(L, C_TEXTO, false, "%*s%s %s %7d %7d %7d %8.1f %8d %6d %7d %7s", folga(k->id, 6), "", k->id, ativ,
                 k->deadlines_perdidos, k->ticks_exec, k->ticks_espera,
                 k->concluidas ? (double)k->resposta_soma / k->concluidas : 0.0, k->resposta_max, k->preempcoes,
                 k->sorteios, term);
@@ -1948,6 +1952,12 @@ static bool acao_simulacao(Sessao *z, int a) {
         bool ok = form_tarefa("Nova tarefa durante a simulação", &t, ids, e->n, -1, e->t, ev, sizeof ev);
         free(ids);
         if (!ok) break;
+        /* Req. 3 da parte B: teste de escalonabilidade antes de aceitar. */
+        char motivo[700];
+        if (sim_admitir_tarefa(&s->atual, &t, motivo, sizeof motivo)) {
+            fmsg(z->msg, sizeof z->msg, "erro: tarefa %s impedida de ser escalonada: %s", t.id, motivo);
+            break;
+        }
         /* O TCB aponta para os eventos da configuração; a tarefa fica em
          * `extras`, que vive até o fim da simulação. */
         config_adicionar(&z->extras, &t);

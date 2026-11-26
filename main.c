@@ -38,6 +38,9 @@ static void uso(const char *prog) {
            "  --plugin ARQ           carrega um escalonador: ARQ.txt (fórmula da prioridade, ex.:\n"
            "                         'nome: LLF' e 'prioridade: deadline_abs - agora - restante')\n"
            "                         ou ARQ.so/ARQ.dylib (plugin compilado); pode repetir\n"
+           "  --sem-teste            desliga o teste de escalonabilidade: aceita todas as tarefas, mesmo\n"
+           "                         acima do limite (para ver sobrecarga e perda de prazo, como no\n"
+           "                         Projeto A); aperiódica e esporádica continuam precisando de servidor\n"
            "  --sem-cor              desliga as cores ANSI\n"
            "  --terminal             usa a interface de texto em vez da janela gráfica\n"
            "  -h, --help             mostra esta ajuda\n\n"
@@ -51,6 +54,14 @@ static void uso(const char *prog) {
            "  - repetidos: T1 e t1, 01 e 1, T01 e T1 são o mesmo id (0 e T0 não são);\n"
            "  - rótulo: T<id> se todos os ids forem inteiros (T0, T1), senão o id como foi escrito.\n"
            "Linha que começa com '#' e não tem ';' é comentário (\"#1;...\" é a tarefa de id #1).\n\n"
+           "Tipos de tarefa (Projeto B):\n"
+           "  periodo > 0: periódica; periodo = 0: aperiódica (chega uma vez, no ingresso);\n"
+           "  periodo < 0: esporádica; |periodo| = intervalo mínimo e as ocorrências vão em lista_eventos,\n"
+           "               relativas ao ingresso (ex.: 0,10,25);\n"
+           "  id BSxx, PSxx, DSxx ou SSxx: servidor Background, Polling, Deferrable ou Sporadic\n"
+           "               (duracao = capacidade, periodo = período do servidor).\n"
+           "  Aperiódicas e esporádicas só executam por um servidor. Toda tarefa passa pelo teste de\n"
+           "  escalonabilidade antes de ser aceita (desligue com --sem-teste).\n\n"
            "Algoritmo que não é RM nem EDF (ex.: LLF;2;1): se houver LLF.txt (ou .so/.dylib) na pasta do\n"
            "arquivo de configuração, ele é carregado sozinho; senão, use --plugin, o botão \"Carregar\n"
            "escalonador...\" da janela ou o comando p do terminal.\n", prog);
@@ -89,6 +100,11 @@ int main(int argc, char **argv) {
         if (!strcmp(a, "-h") || !strcmp(a, "--help")) {
             uso(argv[0]);
             return 0;
+        } else if (!strcmp(a, "--sem-teste")) {
+            /* Req. 3 da parte B: por padrão toda tarefa passa pelo teste de
+             * escalonabilidade antes de ser aceita. Desligar serve para
+             * demonstrar sobrecarga (ex.: figura 2.6 com RM, U = 100%). */
+            g_teste_escalonabilidade = false;
         } else if (!strcmp(a, "--sem-cor")) {
             g_usar_cores = false;
         } else if (!strcmp(a, "--terminal")) {

@@ -703,28 +703,44 @@ void leitor_fechar(LeitorLinhas *l) {
     l->texto = l->p = NULL;
 }
 
-/* Aperiódicas e esporádicas só executam por meio de um servidor (req. 1.1 da
- * parte B): elas nunca disputam a CPU sozinhas. Sem nenhum servidor no
- * arquivo, ficariam esperando para sempre e a simulação nunca acabaria;
- * então são impedidas de ser escalonadas, com aviso, e o resto carrega
- * normalmente. Roda depois de ler o arquivo inteiro porque o servidor pode
- * aparecer numa linha depois da tarefa. */
-static void exigir_servidor(Config *cfg) {
-    for (int i = 0; i < cfg->n; i++)
-        if (cfg->tarefas[i].tipo == TIPO_SERVIDOR) return;
-    int j = 0;
-    for (int i = 0; i < cfg->n; i++) {
-        TarefaCfg *t = &cfg->tarefas[i];
-        if (t->tipo == TIPO_APERIODICA || t->tipo == TIPO_ESPORADICA) {
-            msg_add(&cfg->avisos, "%s:%d: tarefa %s impedida de ser escalonada: é %s e não há nenhum servidor "
-                    "(BSxx, PSxx, DSxx ou SSxx) para executá-la", cfg->caminho, t->linha, t->id,
-                    tipo_nome(t->tipo, t->srv));
-            config_liberar_tarefa(t);
-            continue;
+/* Teste de escalonabilidade na carga (req. 3 da parte B): cada tarefa é
+ * testada junto com as que já foram aceitas, e a que não passa é impedida
+ * de ser escalonada (aviso "tarefa X impedida de ser escalonada: motivo",
+ * com a utilização, o limite e o algoritmo) e o resto do arquivo carrega.
+ * Ordem: primeiro periódicas e servidores, na ordem do arquivo; depois
+ * aperiódicas e esporádicas, porque elas dependem de existir servidor e da
+ * capacidade dele, e o servidor pode estar numa linha mais abaixo. Roda
+ * depois de ler o arquivo inteiro, com o algoritmo e as CPUs da 1ª linha. */
+static void admitir_tarefas(Config *cfg) {
+    int n = cfg->n;
+    bool *aceita = xcalloc((size_t)(n ? n : 1), sizeof(bool));
+    ItemTeste *ok = xmalloc((size_t)(n ? n : 1) * sizeof *ok);
+    int nok = 0;
+    char motivo[600];
+    for (int fase = 0; fase < 2; fase++) {
+        for (int i = 0; i < n; i++) {
+            const TarefaCfg *t = &cfg->tarefas[i];
+            bool aper = t->tipo == TIPO_APERIODICA || t->tipo == TIPO_ESPORADICA;
+            if (aper != (fase == 1)) continue;
+            ItemTeste it = {t->tipo, t->srv, t->duracao, t->periodo};
+            if (teste_admitir(ok, nok, it, cfg->algoritmo, cfg->ncpus, motivo, sizeof motivo)) {
+                msg_add(&cfg->avisos, "%s:%d: tarefa %s impedida de ser escalonada: %s", cfg->caminho, t->linha,
+                        t->id, motivo);
+                continue;
+            }
+            aceita[i] = true;
+            ok[nok++] = it;
         }
-        cfg->tarefas[j++] = *t;
+    }
+    /* tira as recusadas, mantendo a ordem do arquivo */
+    int j = 0;
+    for (int i = 0; i < n; i++) {
+        if (aceita[i]) cfg->tarefas[j++] = cfg->tarefas[i];
+        else config_liberar_tarefa(&cfg->tarefas[i]);
     }
     cfg->n = j;
+    free(aceita);
+    free(ok);
 }
 
 /*É a função principal do módulo. Carrega o arquivo de configuração, descarta
@@ -761,7 +777,7 @@ bool config_carregar(const char *caminho, Config *cfg) {
     free(vistos.id);
     free(vistos.linha);
     leitor_fechar(&l);
-    if (cfg->erros.n == 0) exigir_servidor(cfg);
+    if (cfg->erros.n == 0) admitir_tarefas(cfg);
 
     /* Checagens do arquivo como um todo (req. 3.3.1: pelo menos 2 linhas). */
     if (!viu_sistema) {
@@ -1259,6 +1275,177 @@ void config_linha_tarefa(const TarefaCfg *t, char *buf, size_t tam) {
     if (!(t->tipo == TIPO_APERIODICA && t->prazo == 0)) snprintf(prazo, sizeof prazo, "%d", t->prazo);
     snprintf(buf, tam, "%s;%06X;%d;%d;%d;%s;%s", t->id, t->cor, t->ingresso, t->duracao, t->periodo, prazo,
              t->eventos ? t->eventos : "");
+}
+
+/* ------------------------------------------ teste de escalonabilidade (Projeto B) */
+/*
+ * Requisito 3 da parte B: testar a escalonabilidade antes de aceitar
+ * qualquer tarefa, de todos os tipos. Os testes são os do capítulo
+ * "Escalonamento de Tempo Real", que comparam a utilização U = soma de C/P
+ * com um limite:
+ *   - RM: Liu & Layland, U <= n(2^(1/n) - 1) (equação [2] do capítulo). O
+ *     PS e o SS entram como uma tarefa periódica a mais, de C e P iguais aos
+ *     do servidor (o capítulo diz isso dos dois). O DS não: ele pode executar
+ *     em qualquer ponto do período e atrasa mais as outras, e o capítulo dá
+ *     a equação [19], U_P <= ln((U_DS + 2)/(2 U_DS + 1)), que vale para
+ *     muitas tarefas. Usamos a forma dela para n tarefas, a de Lehoczky, Sha
+ *     e Strosnider, de onde a [19] sai quando n cresce:
+ *         U_P <= n(((U_DS + 2)/(2 U_DS + 1))^(1/n) - 1).
+ *     Sem DS (U_DS = 0) ela é exatamente Liu & Layland;
+ *   - EDF: U <= 1 (servidores PS, DS e SS também como tarefas periódicas);
+ *   - outro algoritmo (fórmula ou plugin): não há teste próprio; vale só a
+ *     condição necessária U <= 1 (nenhuma CPU trabalha mais que 100%);
+ *   - BS: utilização 0, porque só usa o tempo que sobra;
+ *   - com M CPUs: o limite de 1 CPU vezes M. O capítulo só tem testes para
+ *     1 CPU; esta é a extensão mais simples, e é uma aproximação (com a fila
+ *     global, um conjunto aceito ainda pode perder prazos em casos
+ *     especiais, o "efeito Dhall"). Por isso o simulador continua mostrando
+ *     qualquer perda de prazo no Gantt.
+ * Aperiódica e esporádica não aumentam U (quem gasta a CPU por elas é o
+ * servidor, já contado). Elas precisam de pelo menos um servidor, e as
+ * esporádicas, que têm intervalo mínimo entre ocorrências, pedem no pior
+ * caso C/|periodo| cada uma: a soma tem que caber no que os servidores
+ * oferecem (soma de C/P dos PS, DS e SS, mais o tempo livre se houver BS).
+ */
+
+bool g_teste_escalonabilidade = true;
+
+/* Folga para comparar números com vírgula: U = 1 em EDF tem que passar
+ * mesmo que a soma 0,5 + 0,5 dê 1,0000000001 por arredondamento. */
+#define FOLGA_TESTE 1e-9
+
+/* x^(1/n) por bissecção: o y em [1, x] com y^n = x (x >= 1). Como o antigo
+ * sim_limite_rm, evita depender da libm (-lm) só por causa de uma conta. */
+static double raiz_n(double x, int n) {
+    double lo = 1.0, hi = x > 1.0 ? x : 1.0;
+    for (int it = 0; it < 100; it++) {
+        double m = (lo + hi) / 2, p = 1.0;
+        for (int k = 0; k < n; k++) p *= m;
+        if (p < x) lo = m;
+        else hi = m;
+    }
+    return lo;
+}
+
+/* Limite total (periódicas + DS) do RM para n tarefas periódicas (contando
+ * PS e SS) e DS de utilização u_ds. Ex.: n = 3, u_ds = 0 -> 0,780. */
+double limite_rm(int n, double u_ds) {
+    /* Sem periódicas: só DS. O limite é a própria U_DS (até 1 CPU cheia). */
+    if (n <= 0) return u_ds > 0 && u_ds < 1.0 ? u_ds : 1.0;
+    double x = (u_ds + 2.0) / (2.0 * u_ds + 1.0);
+    double lim = n * (raiz_n(x, n) - 1.0) + u_ds;
+    return lim < 1.0 ? lim : 1.0;
+}
+
+void teste_calcular(const ItemTeste *v, int n, int alg, int ncpus, ResultadoTeste *r) {
+    memset(r, 0, sizeof *r);
+    double u_ds = 0, u_per = 0, banda = 0;
+    int nper = 0;
+    bool tem_bs = false, tem_ds = false;
+    for (int i = 0; i < n; i++) {
+        const ItemTeste *x = &v[i];
+        double u = tarefa_utilizacao(x->tipo, x->srv, x->duracao, x->periodo);
+        if (x->tipo == TIPO_SERVIDOR) {
+            r->nservidores++;
+            if (x->srv == SRV_BS) tem_bs = true;
+            else banda += u;
+        }
+        if (x->srv == SRV_DS) {
+            u_ds += u;
+            tem_ds = true;
+        } else if (u > 0) {
+            u_per += u;
+            nper++;
+        }
+        if (x->tipo == TIPO_ESPORADICA && x->periodo < 0) r->u_esp += (double)x->duracao / -x->periodo;
+    }
+    r->u = u_per + u_ds;
+    int m = ncpus > 0 ? ncpus : 1;
+    const Escalonador *e = sched_obter(alg);
+    const char *nome = e ? e->nome : "?";
+    double lim1 = 1.0;
+    if (e && str_ieq(nome, "RM")) {
+        lim1 = limite_rm(nper, u_ds);
+        if (tem_ds)
+            snprintf(r->regra, sizeof r->regra, "RM com DS, eq. [19] do capítulo para n = %d: "
+                     "n((U_DS+2)/(2U_DS+1))^(1/n) - n + U_DS", nper);
+        else
+            snprintf(r->regra, sizeof r->regra, "RM, Liu & Layland: n(2^(1/n)-1) com n = %d", nper);
+    } else if (e && str_ieq(nome, "EDF")) {
+        snprintf(r->regra, sizeof r->regra, "EDF: U <= 1");
+    } else {
+        snprintf(r->regra, sizeof r->regra, "%s não tem teste próprio: só a condição necessária U <= 1", nome);
+    }
+    if (m > 1) {
+        size_t l = strlen(r->regra);
+        snprintf(r->regra + l, sizeof r->regra - l, ", vezes %d CPUs", m);
+    }
+    r->limite = lim1 * m;
+    /* O BS oferece o tempo que as periódicas e os outros servidores deixam. */
+    r->banda = banda + (tem_bs && m > r->u ? m - r->u : 0.0);
+}
+
+const char *teste_admitir(const ItemTeste *aceitas, int n, ItemTeste nova, int alg, int ncpus, char *buf, size_t tam) {
+    ItemTeste *v = xmalloc((size_t)(n + 1) * sizeof *v);
+    if (n) memcpy(v, aceitas, (size_t)n * sizeof *v);
+    v[n] = nova;
+    ResultadoTeste r;
+    teste_calcular(v, n + 1, alg, ncpus, &r);
+    free(v);
+    const Escalonador *e = sched_obter(alg);
+    const char *nome = e ? e->nome : "?";
+    if (nova.tipo == TIPO_APERIODICA || nova.tipo == TIPO_ESPORADICA) {
+        /* Sem servidor ela esperaria para sempre: vale mesmo com --sem-teste. */
+        if (r.nservidores == 0) {
+            snprintf(buf, tam, "é %s e não há nenhum servidor (BSxx, PSxx, DSxx ou SSxx) para executá-la "
+                     "(U = %.3f, limite = %.3f, algoritmo %s)", tipo_nome(nova.tipo, nova.srv), r.u, r.limite, nome);
+            return buf;
+        }
+        if (g_teste_escalonabilidade && nova.tipo == TIPO_ESPORADICA && r.u_esp > r.banda + FOLGA_TESTE) {
+            snprintf(buf, tam, "as esporádicas pediriam, no pior caso, U = %.3f (soma de C/intervalo mínimo), "
+                     "mais do que os servidores oferecem: limite = %.3f (soma de C/P dos servidores PS, DS e SS, "
+                     "mais o tempo livre se houver BS); algoritmo %s", r.u_esp, r.banda, nome);
+            return buf;
+        }
+        return NULL;
+    }
+    if (g_teste_escalonabilidade && r.u > r.limite + FOLGA_TESTE) {
+        snprintf(buf, tam, "com ela a utilização seria U = %.3f, acima do limite %.3f (%s); algoritmo %s",
+                 r.u, r.limite, r.regra, nome);
+        return buf;
+    }
+    return NULL;
+}
+
+/* As tarefas da configuração no formato do teste (quem chama libera). */
+ItemTeste *config_itens_teste(const Config *cfg) {
+    ItemTeste *v = xmalloc((size_t)(cfg->n ? cfg->n : 1) * sizeof *v);
+    for (int i = 0; i < cfg->n; i++) {
+        const TarefaCfg *t = &cfg->tarefas[i];
+        v[i] = (ItemTeste){t->tipo, t->srv, t->duracao, t->periodo};
+    }
+    return v;
+}
+
+/* Teste para a tarefa `t` entrar na configuração (tela de configuração). */
+const char *config_admitir_tarefa(const Config *cfg, const TarefaCfg *t, char *buf, size_t tam) {
+    ItemTeste *v = config_itens_teste(cfg);
+    const char *m = teste_admitir(v, cfg->n, (ItemTeste){t->tipo, t->srv, t->duracao, t->periodo}, cfg->algoritmo,
+                                  cfg->ncpus, buf, tam);
+    free(v);
+    return m;
+}
+
+void teste_resumo(const ItemTeste *v, int n, int alg, int ncpus, char *buf, size_t tam) {
+    ResultadoTeste r;
+    teste_calcular(v, n, alg, ncpus, &r);
+    int l = snprintf(buf, tam, "Teste de escalonabilidade: U = %.3f, limite = %.3f (%s) -> %s", r.u, r.limite,
+                     r.regra, r.u <= r.limite + FOLGA_TESTE ? "escalonável" : "NÃO passa no teste");
+    if (r.u_esp > 0 && l > 0 && (size_t)l < tam)
+        snprintf(buf + l, tam - (size_t)l, " | esporádicas: U = %.3f de %.3f oferecidos pelos servidores",
+                 r.u_esp, r.banda);
+    if (!g_teste_escalonabilidade && l > 0 && strlen(buf) + 1 < tam)
+        snprintf(buf + strlen(buf), tam - strlen(buf), " (teste desligado com --sem-teste)");
 }
 
 /* ---------------------------------------------------------------- terminal */

@@ -248,23 +248,13 @@ static bool pedir_tarefa(TarefaCfg *t, const CtxIds *ids, int min_ingresso, char
 
 /* ------------------------------------------------------- configuração */
 
-/* Mostra U = soma(C/P) e o que ela significa para o algoritmo escolhido:
- *   RM:  compara com o limite n(2^(1/n)-1) (teste suficiente: abaixo dele
- *        garante escalonar, acima fica "inconclusivo");
- *   EDF: com prazo = período, escalona em 1 CPU se e somente se U <= 1.
- * É só uma informação para o usuário; não afeta a simulação. */
-static void imprimir_utilizacao(int n, double u, int alg) {
-    printf("Utilização U = Σ C/P = %.3f", u);
-    const Escalonador *e = sched_obter(alg);
-    if (e && str_ieq(e->nome, "RM")) {
-        double lim = sim_limite_rm(n);
-        printf("  |  teste suficiente do RM: U ≤ n(2^(1/n)−1) = %.3f → %s", lim,
-               u <= lim ? "escalonável (1 CPU)" : "inconclusivo (pode perder prazos)");
-    } else if (e && str_ieq(e->nome, "EDF")) {
-        printf("  |  EDF (prazo = período): escalonável em 1 CPU sse U ≤ 1 → %s",
-               u <= 1.0 ? "sim" : "não");
-    }
-    printf("\n(os testes valem para 1 CPU; com mais CPUs são só uma referência)\n");
+/* Mostra o teste de escalonabilidade do conjunto (req. 3 da parte B): U, o
+ * limite e de onde ele vem (ver teste_calcular em config.c). É a mesma
+ * conta que decide se uma tarefa nova é aceita. */
+static void imprimir_teste(const ItemTeste *v, int n, int alg, int ncpus) {
+    char buf[700];
+    teste_resumo(v, n, alg, ncpus, buf, sizeof buf);
+    printf("%s\n", buf);
 }
 
 void ui_imprimir_config(const Config *cfg) {
@@ -279,21 +269,24 @@ void ui_imprimir_config(const Config *cfg) {
     printf("algoritmo %s (%s) | quantum %d | %d CPU(s) (máx. %d)\n", e ? e->nome : "?",
            e ? e->descricao : "", cfg->quantum, cfg->ncpus, MAX_CPUS);
     term_negrito();
-    printf("Tarefas (%d periódicas):\n", cfg->n);
+    printf("Tarefas (%d):\n", cfg->n);
     term_reset();
-    printf("  %6s  %-7s %8s %8s %8s %8s  %s\n", "id", "cor", "ingresso", "duração", "período", "prazo", "eventos");
-    double u = 0;
+    printf("  %6s  %-7s %8s %8s %8s %8s  %-11s %s\n", "id", "cor", "ingresso", "duração", "período", "prazo", "tipo",
+           "eventos");
     for (int i = 0; i < cfg->n; i++) {
         const TarefaCfg *t = &cfg->tarefas[i];
         printf("  %*s%s  ", folga(t->id, 6), "", t->id);
         term_bg(t->cor);
         printf("  ");
         term_reset();
-        printf("%06X %7d %8d %8d %8d  %s\n", t->cor, t->ingresso, t->duracao, t->periodo, t->prazo,
+        /* tipo curto: "periódica", "aperiódica", "esporádica" ou a sigla do servidor */
+        printf("%06X %7d %8d %8d %8d  %-11s %s\n", t->cor, t->ingresso, t->duracao, t->periodo, t->prazo,
+               t->tipo == TIPO_SERVIDOR ? servidor_sigla(t->srv) : tipo_nome(t->tipo, t->srv),
                t->eventos && *t->eventos ? t->eventos : "-");
-        u += tarefa_utilizacao(t->tipo, t->srv, t->duracao, t->periodo);
     }
-    imprimir_utilizacao(cfg->n, u, cfg->algoritmo);
+    ItemTeste *v = config_itens_teste(cfg);
+    imprimir_teste(v, cfg->n, cfg->algoritmo, cfg->ncpus);
+    free(v);
 }
 
 /* Posição da tarefa de id `id` na configuração: devolve o ÍNDICE (-1 se
@@ -402,7 +395,14 @@ bool ui_menu_config(Config *cfg) {
             id_sugerir(ids, cfg->n, t.id, sizeof t.id);
             char ev[512];
             printf("Nova tarefa (Enter aceita o valor sugerido):\n");
-            if (pedir_tarefa(&t, &c, 0, ev, sizeof ev)) config_adicionar(cfg, &t);
+            if (pedir_tarefa(&t, &c, 0, ev, sizeof ev)) {
+                /* Req. 3 da parte B: o teste de escalonabilidade vem antes de aceitar. */
+                char motivo[700];
+                if (config_admitir_tarefa(cfg, &t, motivo, sizeof motivo))
+                    ui_erro("tarefa %s impedida de ser escalonada: %s", t.id, motivo);
+                else
+                    config_adicionar(cfg, &t);
+            }
             free(ids);
             break;
         }
@@ -630,7 +630,10 @@ static void estado_sistema(const Simulador *s) {
     term_reset();
     printf("  algoritmo %s | quantum %d | %d CPU(s) | %s\n", esc->nome, e->quantum, e->ncpus,
            e->fim ? "simulação concluída" : sim_bloqueado(e) ? "bloqueada (todas suspensas)" : "em andamento");
-    imprimir_utilizacao(e->n, sim_utilizacao(e), e->alg);
+    int nv;
+    ItemTeste *v = sim_itens_teste(e, &nv);
+    imprimir_teste(v, nv, e->alg, e->ncpus);
+    free(v);
     printf("\n  %6s %-27s %7s %8s %8s %5s %7s\n", "id", "estado", "ativ.", "restante", "deadline", "CPU", "prazos");
     int *ordem = gantt_ordem(e);
     for (int r = e->n - 1; r >= 0; r--) {
@@ -837,6 +840,13 @@ static void adicionar_tarefa(Simulador *s, Config *extras, char *msg, size_t tam
         return;
     }
     free(ids);
+    /* Req. 3 da parte B: o teste de escalonabilidade vem antes de aceitar,
+     * contra as tarefas que ainda não terminaram. */
+    char motivo[700];
+    if (sim_admitir_tarefa(&s->atual, &t, motivo, sizeof motivo)) {
+        fmsg(msg, tam, "erro: tarefa %s impedida de ser escalonada: %s", t.id, motivo);
+        return;
+    }
     /* O TCB aponta para os eventos da configuração; guardamos a tarefa em
      * `extras`, que vive até o fim da simulação. */
     config_adicionar(extras, &t);

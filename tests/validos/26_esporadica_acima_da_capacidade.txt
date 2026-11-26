@@ -1,0 +1,8 @@
+# Teste de escalonabilidade da esporádica (parte B, req. 3): E pede no pior
+# caso C/intervalo mínimo = 3/5 = 0,6 da CPU, mas o único servidor (PS1)
+# oferece 1/10 = 0,1. E é impedida de ser escalonada e o resto carrega.
+RM;2;1
+1;E74C3C;0;2;10;10
+PS1;2ECC71;0;1;10;10
+E;F39C12;0;3;-5;5;0,5,10
+A;9B59B6;4;1;0;
