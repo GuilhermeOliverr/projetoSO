@@ -53,9 +53,12 @@ done
 roda() { $BIN "$1" --modo completo --texto --sem-cor --saida "$TMP/g.svg" ${2:+"$@"} 2>&1; }
 
 echo "== Avisos"
+# Projeto B: a aperiódica só executa por um servidor; sem nenhum servidor no
+# arquivo ela é impedida de ser escalonada (com aviso) e o resto carrega.
 roda tests/validos/08_com_aperiodica.txt > "$TMP/out"
-grep -q 'aperiódica (periodo = 0) e foi ignorada' "$TMP/out" && ok "aperiódica ignorada com aviso" \
-    || falha "aperiódica ignorada com aviso"
+grep -q 'tarefa 2 impedida de ser escalonada: é aperiódica e não há nenhum servidor' "$TMP/out" \
+    && ok "aperiódica sem servidor: impedida de ser escalonada, com aviso" \
+    || falha "aperiódica sem servidor deveria ser impedida com aviso"
 grep -q 'T2' "$TMP/out" && falha "aperiódica não deveria aparecer no Gantt" || ok "aperiódica fora do Gantt"
 
 echo "== Figura 2.5 (tabela 2.1 com RM)"

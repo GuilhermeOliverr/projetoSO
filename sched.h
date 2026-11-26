@@ -22,8 +22,9 @@
  * task.h - TCB (Task Control Block): tudo o que o simulador sabe sobre uma
  * tarefa fica numa única estrutura.
  *
- * Decisão: o TCB não tem ponteiros para memória própria (só `eventos_raw` e
- * `eventos`, que apontam para dados imutáveis da configuração). Assim um snapshot do
+ * Decisão: o TCB não tem ponteiros para memória própria (só `eventos_raw`,
+ * `eventos` e `ocorrencias`, que apontam para dados imutáveis da
+ * configuração). Assim um snapshot do
  * sistema é só uma cópia de um vetor de TCBs com memcpy, o que deixa o
  * avançar/retroceder simples e barato.
  */
@@ -68,6 +69,50 @@ typedef enum {
     SUSP_USUARIO   // Motivo 2: Suspensa manualmente pelo usuário no passo a passo (no Gantt aparece em preto pontilhado)
 } MotivoSuspensao;
 
+/* Tipo da tarefa (Projeto B, req. 1 e 2). Vem do arquivo de configuração:
+ *   - PERIODICA:  periodo > 0 (como no Projeto A);
+ *   - APERIODICA: periodo = 0; uma ativação só, no instante de ingresso;
+ *   - ESPORADICA: periodo < 0; |periodo| é o intervalo mínimo entre duas
+ *                 ocorrências, e os instantes de cada ocorrência (relativos
+ *                 ao ingresso) vêm em lista_eventos ("0,10,25");
+ *   - SERVIDOR:   id BSxx, PSxx, DSxx ou SSxx (ver TipoServidor). É uma
+ *                 tarefa periódica que executa as aperiódicas/esporádicas.
+ * Aperiódicas e esporádicas NUNCA disputam a CPU diretamente: elas esperam
+ * numa fila (FIFO) até um servidor pegá-las (req. 1.1 e 2.2). */
+typedef enum {
+    TIPO_PERIODICA,
+    TIPO_APERIODICA,
+    TIPO_ESPORADICA,
+    TIPO_SERVIDOR
+} TipoTarefa;
+
+/* Os quatro servidores da seção 2.8 do capítulo "Escalonamento de Tempo
+ * Real". `duracao` é a capacidade (C) e `periodo` o período (P):
+ *   - BS (Background): sem capacidade; só usa CPU que nenhuma periódica nem
+ *     outro servidor quis (prioridade abaixo de todas);
+ *   - PS (Polling): capacidade cheia no início de cada período; se não há
+ *     aperiódica pendente, perde a capacidade até o próximo período;
+ *   - DS (Deferrable): capacidade cheia no início de cada período, mas
+ *     guarda a capacidade enquanto não há aperiódica pendente;
+ *   - SS (Sporadic): só recarrega o que consumiu, no instante RT = início do
+ *     intervalo ativo + período. */
+typedef enum {
+    SRV_NENHUM,   // não é servidor
+    SRV_BS,
+    SRV_PS,
+    SRV_DS,
+    SRV_SS
+} TipoServidor;
+
+/* Recargas pendentes de um servidor SS. Cada intervalo ativo agenda uma;
+ * dentro de um período cabem no máximo C intervalos (cada um consome pelo
+ * menos 1 tick), então 16 bastam nos casos usuais. Se lotar, a recarga nova
+ * é somada à última agendada: chega mais tarde do que deveria, o que nunca
+ * deixa o servidor usar mais do que C por período (é o lado seguro). Vetor
+ * fixo, e não ponteiro, pelo mesmo motivo do id: o TCB é copiado com memcpy
+ * a cada snapshot. */
+#define MAX_RECARGAS 16
+
 // Início da estrutura principal TCB (Task Control Block) que guarda todo o contexto da tarefa
 typedef struct {
 
@@ -81,6 +126,20 @@ typedef struct {
     const char *eventos_raw;   // Ponteiro para a string bruta contendo a lista de eventos associada à tarefa
     const char *const *eventos;// Vetor dinâmico de ponteiros para as strings de eventos individuais sem interpretação
     int neventos;              // Quantidade total de eventos armazenados no vetor de eventos
+
+    /* ---- Projeto B: tipo da tarefa e servidores ---- */
+    TipoTarefa tipo;           // periódica, aperiódica, esporádica ou servidor (ver TipoTarefa)
+    TipoServidor srv;          // qual servidor (SRV_NENHUM se não é servidor)
+    const int *ocorrencias;    // esporádica: instantes de cada ocorrência, relativos ao ingresso (dados imutáveis da configuração, como `eventos`)
+    int total_ativacoes;       // quantas ativações a tarefa tem: periódica 10, aperiódica 1, esporádica = nº de ocorrências (servidor: não usa)
+    int servidor;              // aperiódica/esporádica: índice do servidor que está com ela (-1 = na fila ou sem ativação pendente)
+    int atendendo;             // servidor: índice da aperiódica/esporádica que ele está executando (-1 = nenhuma)
+    int capacidade;            // servidor PS/DS/SS: quanto da capacidade ainda resta (BS não tem capacidade)
+    int ss_inicio;             // SS: instante em que começou o intervalo ativo atual (-1 = inativo)
+    int ss_consumido;          // SS: capacidade consumida no intervalo ativo atual (é o que vai ser recarregado)
+    int nrecargas;             // SS: quantas recargas estão agendadas
+    int recarga_inst[MAX_RECARGAS], recarga_qtd[MAX_RECARGAS]; // SS: instante e quantidade de cada recarga agendada
+    int prazos_conferidos;     // aperiódica/esporádica: 1ª ativação cuja perda de prazo ainda não foi conferida (ver sim.c, passo 4)
 
     /* ---- estado dinâmico ---- */
     EstadoTarefa estado;        // Estado atual de execução da tarefa no ciclo de vida do SO (T_PRONTA, T_EXECUTANDO, etc.)
@@ -128,6 +187,12 @@ const char *estado_nome(EstadoTarefa e);    // Retorna uma string com o nome leg
 const char *estado_descricao(const TCB *k);    // Retorna a descrição detalhada do estado incluindo o motivo da suspensão quando aplicável
 
 bool suspensa_pelo_usuario(const TCB *k);    // Retorna true se a tarefa foi suspensa manualmente pelo usuário (SUSP_USUARIO), impedindo que chegue a progredir sozinha
+
+bool tcb_eh_servidor(const TCB *k);      // true se a tarefa é um servidor (BS, PS, DS ou SS)
+bool tcb_eh_aperiodica(const TCB *k);    // true se a tarefa é aperiódica ou esporádica (só executa por meio de um servidor)
+int tcb_chegada(const TCB *k, int j);    // instante de chegada da ativação j (periódica: o anotado; aperiódica: o ingresso; esporádica: ingresso + ocorrência j)
+bool tcb_prazo_perdido(const TCB *k);    // true se a ativação em andamento (a de número `concluidas`) já perdeu o prazo
+void tcb_texto_ativacoes(const TCB *k, char *buf, size_t tam);    // coluna "ativ." das tabelas: "3/10", "1/1", ou "cap 1/2" para servidor
 
 /* ===========================================================================
  * Seção sched.h (originalmente include/sched.h)

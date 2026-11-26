@@ -857,6 +857,8 @@ static bool form_tarefa(const char *titulo, TarefaCfg *t, const char *const *ids
     snprintf(ev, sizeof ev, "%s", c[CT_EVENTOS].valor);
     snprintf(eventos, tam_ev, "%s", str_trim(ev));
     k.res.eventos = eventos;
+    k.res.srv = id_servidor(k.res.id);                    /* id PSxx etc. = servidor */
+    k.res.tipo = tarefa_tipo(k.res.id, k.res.periodo);
     *t = k.res;
     return true;
 }
@@ -1342,7 +1344,8 @@ static int tela_config(Config *cfg) {
         /* tarefas */
         Linhas util = {0};
         double u = 0;
-        for (int i = 0; i < cfg->n; i++) u += (double)cfg->tarefas[i].duracao / cfg->tarefas[i].periodo;
+        for (int i = 0; i < cfg->n; i++)
+            u += tarefa_utilizacao(cfg->tarefas[i].tipo, cfg->tarefas[i].srv, cfg->tarefas[i].duracao, cfg->tarefas[i].periodo);
         linhas_utilizacao(&util, cfg->n, u, cfg->algoritmo);
         int h_util = linhas_visuais(&util, w - 24) * LINHA + 10;
         /* avisos do arquivo (ex.: eventos lidos e guardados), com
@@ -1437,7 +1440,7 @@ static int tela_config(Config *cfg) {
         case C_PASSO:
         case C_COMPLETA:
             if (cfg->n == 0) {
-                fmsg(msg, sizeof msg, "erro: não há tarefas periódicas para simular; use \"+ Nova tarefa\" ou abra outro arquivo");
+                fmsg(msg, sizeof msg, "erro: não há tarefas para simular; use \"+ Nova tarefa\" ou abra outro arquivo");
                 break;
             }
             return acao == C_PASSO ? 'a' : 'b';
@@ -1473,7 +1476,8 @@ static int tela_config(Config *cfg) {
         case C_NOVA: {
             const char **ids = ids_cfg(cfg);
             TarefaCfg t = {"", config_cor_padrao(cfg->n), PADRAO_INGRESSO,
-                           PADRAO_DURACAO, PADRAO_PERIODO, PADRAO_PERIODO, NULL, 0, NULL, 0};
+                           PADRAO_DURACAO, PADRAO_PERIODO, PADRAO_PERIODO, NULL, 0, NULL, 0,
+                           TIPO_PERIODICA, SRV_NENHUM, NULL, 0};
             id_sugerir(ids, cfg->n, t.id, sizeof t.id);
             char ev_txt[512];
             if (form_tarefa("Nova tarefa", &t, ids, cfg->n, -1, 0, ev_txt, sizeof ev_txt)) {
@@ -1628,7 +1632,7 @@ static void linhas_tarefa(const Sessao *z, int i, Linhas *L) {
     if (k->restante > 0) lin_add(L, C_TEXTO, false, "Prioridade (menor = mais prioritária): nominal %d, ativa %d", k->prio_nominal, k->prio_ativa);
     lin_add(L, C_TEXTO, false, "Ativações: %d chegaram, %d concluídas (de %d)", k->liberadas, k->concluidas, MAX_ATIVACOES);
     if (k->restante > 0) {
-        bool perdeu = k->perdas & (1u << k->concluidas);
+        bool perdeu = tcb_prazo_perdido(k);
         lin_add(L, perdeu ? C_ERRO : C_TEXTO, perdeu, "Ativação atual: nº %d, chegou em %d, deadline em %d, faltam %d tick(s)%s",
                 k->concluidas + 1, k->chegada_atual, k->deadline_abs, k->restante, perdeu ? " - PRAZO PERDIDO" : "");
         if (k->liberadas - k->concluidas > 1) lin_add(L, C_TEXTO, false, "Ativações acumuladas esperando: %d", k->liberadas - k->concluidas - 1);
@@ -1937,7 +1941,8 @@ static bool acao_simulacao(Sessao *z, int a) {
         const char **ids = xmalloc((size_t)(e->n + 1) * sizeof *ids);
         for (int i = 0; i < e->n; i++) ids[i] = e->tarefas[i].id;
         TarefaCfg t = {"", config_cor_padrao(e->n), e->t, PADRAO_DURACAO, PADRAO_PERIODO,
-                       PADRAO_PERIODO, NULL, 0, NULL, 0};
+                       PADRAO_PERIODO, NULL, 0, NULL, 0,
+                       TIPO_PERIODICA, SRV_NENHUM, NULL, 0};
         id_sugerir(ids, e->n, t.id, sizeof t.id);
         char ev[512];
         bool ok = form_tarefa("Nova tarefa durante a simulação", &t, ids, e->n, -1, e->t, ev, sizeof ev);

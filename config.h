@@ -57,6 +57,11 @@ typedef struct {
     int linha;      // Número da linha do arquivo .txt onde a tarefa foi lida (0 se criada na interface)
     char **lista_ev;     // Vetor dinâmico de strings contendo os eventos já separados por ',' ou ';'
     int nev;     // Quantidade total de eventos presentes em lista_ev
+    /* Projeto B (ver TipoTarefa e TipoServidor em sched.h) */
+    TipoTarefa tipo;     // derivado do id e do período por tarefa_tipo()
+    TipoServidor srv;    // derivado do id por id_servidor()
+    int *ocorrencias;    // esporádica: instantes de cada ocorrência (relativos ao ingresso), lidos de lista_eventos
+    int nocorr;          // quantidade de ocorrências da esporádica
 } TarefaCfg;
 
 // Estrutura para acúmulo de mensagens de avisos e erros durante a leitura do arquivo
@@ -109,6 +114,32 @@ void config_adicionar(Config *cfg, const TarefaCfg *t);    // Adiciona uma nova 
 void config_definir_eventos(TarefaCfg *t, const char *texto);    // Divide a string de eventos por delimitadores e armazena em lista_ev
 
 void config_liberar_tarefa(TarefaCfg *t);    // Libera a memória associada à string de eventos de uma tarefa
+
+/* --- Tipos de tarefa (Projeto B) ---------------------------------------- */
+
+// Tipo do servidor pelo id: BSxx, PSxx, DSxx ou SSxx (xx = um ou mais dígitos), sem diferenciar maiúsculas; SRV_NENHUM se não for servidor
+TipoServidor id_servidor(const char *id);
+
+// Tipo da tarefa pelo id e pelo período: servidor (pelo id), aperiódica (0), esporádica (< 0) ou periódica (> 0)
+TipoTarefa tarefa_tipo(const char *id, int periodo);
+
+// Nome do tipo para mostrar ao usuário ("periódica", "aperiódica", "esporádica", "servidor PS (Polling Server)", ...)
+const char *tipo_nome(TipoTarefa tipo, TipoServidor srv);
+
+// Sigla do servidor ("BS", "PS", "DS", "SS"; "" se não é servidor)
+const char *servidor_sigla(TipoServidor srv);
+
+// Utilização de uma tarefa no teste de escalonabilidade: C/P para periódica e servidor PS/DS/SS; 0 para BS, aperiódica e esporádica
+double tarefa_utilizacao(TipoTarefa tipo, TipoServidor srv, int duracao, int periodo);
+
+// Lê os instantes de uma esporádica do texto de lista_eventos ("0,10,25"). Devolve NULL se deu certo (vetor alocado em *out), ou o motivo (item que não é inteiro >= 0)
+const char *config_ler_ocorrencias(const char *texto, int **out, int *n);
+
+// Confere o intervalo mínimo entre ocorrências consecutivas (req. 1.3 da parte B). NULL se respeita, ou o motivo em 'buf'
+const char *config_intervalo_minimo(const int *oc, int n, int minimo, char *buf, size_t tam);
+
+// Monta a linha do arquivo de configuração de uma tarefa (id;cor;ingresso;duracao;periodo;prazo;lista_eventos), como no .txt
+void config_linha_tarefa(const TarefaCfg *t, char *buf, size_t tam);
 
 const char *config_validar_quantum(int v);    // Valida se o quantum informado é maior que 0
 const char *config_validar_cpus(int v);    // Valida se o número de CPUs está dentro do intervalo permitido (1 a MAX_CPUS)

@@ -241,6 +241,8 @@ static bool pedir_tarefa(TarefaCfg *t, const CtxIds *ids, int min_ingresso, char
     if (!ler_linha(prompt, buf, sizeof buf)) return false;
     snprintf(eventos, tam_ev, "%s", *buf ? buf : (t->eventos ? t->eventos : ""));
     t->eventos = eventos;
+    t->srv = id_servidor(t->id);                  /* id PSxx etc. = servidor */
+    t->tipo = tarefa_tipo(t->id, t->periodo);
     return true;
 }
 
@@ -289,7 +291,7 @@ void ui_imprimir_config(const Config *cfg) {
         term_reset();
         printf("%06X %7d %8d %8d %8d  %s\n", t->cor, t->ingresso, t->duracao, t->periodo, t->prazo,
                t->eventos && *t->eventos ? t->eventos : "-");
-        u += (double)t->duracao / t->periodo;
+        u += tarefa_utilizacao(t->tipo, t->srv, t->duracao, t->periodo);
     }
     imprimir_utilizacao(cfg->n, u, cfg->algoritmo);
 }
@@ -347,7 +349,7 @@ bool ui_menu_config(Config *cfg) {
         bool tem_arg = *arg != '\0';
         switch (cmd) {
         case '\0':   /* Enter sem nada = iniciar (se houver tarefas) */
-            if (cfg->n == 0) { ui_erro("não há tarefas periódicas para simular; use [n] ou [l]"); break; }
+            if (cfg->n == 0) { ui_erro("não há tarefas para simular; use [n] ou [l]"); break; }
             return true;
         case 'a': {
             int a = pedir_algoritmo(cfg->algoritmo);
@@ -395,7 +397,8 @@ bool ui_menu_config(Config *cfg) {
             const char **ids = ids_cfg(cfg);
             CtxIds c = {ids, cfg->n, -1};
             TarefaCfg t = {"", config_cor_padrao(cfg->n), PADRAO_INGRESSO,
-                           PADRAO_DURACAO, PADRAO_PERIODO, PADRAO_PERIODO, NULL, 0, NULL, 0};
+                           PADRAO_DURACAO, PADRAO_PERIODO, PADRAO_PERIODO, NULL, 0, NULL, 0,
+                           TIPO_PERIODICA, SRV_NENHUM, NULL, 0};
             id_sugerir(ids, cfg->n, t.id, sizeof t.id);
             char ev[512];
             printf("Nova tarefa (Enter aceita o valor sugerido):\n");
@@ -474,7 +477,9 @@ static void estatisticas(const Simulador *s) {
     for (int i = 0; i < e->n; i++) {
         const TCB *k = &e->tarefas[i];
         perdidos += k->deadlines_perdidos;
-        printf("  %*s%s %4d/%-2d %7d %7d %7d %8.1f %8d %6d %7d ", folga(k->id, 6), "", k->id, k->concluidas, MAX_ATIVACOES,
+        char ativ[24];
+        tcb_texto_ativacoes(k, ativ, sizeof ativ);
+        printf("  %*s%s %s %7d %7d %7d %8.1f %8d %6d %7d ", folga(k->id, 6), "", k->id, ativ,
                k->deadlines_perdidos, k->ticks_exec, k->ticks_espera,
                k->concluidas ? (double)k->resposta_soma / k->concluidas : 0.0, k->resposta_max,
                k->preempcoes, k->sorteios);
@@ -525,7 +530,7 @@ static bool exportar(const Simulador *s, const Config *cfg, const char *caminho,
  * SVG. Devolve o código de saída do programa. */
 int ui_execucao_completa(const Config *cfg, const OpcoesUI *op) {
     if (cfg->n == 0) {
-        ui_erro("não há tarefas periódicas para simular");
+        ui_erro("não há tarefas para simular");
         return 1;
     }
     Simulador s;
@@ -562,22 +567,52 @@ static void detalhes_tarefa(const Simulador *s, int i) {
     term_reset();
     printf("  parâmetros: cor %06X | ingresso %d | duração %d | período %d | prazo %d\n",
            k->cor, k->ingresso, k->duracao, k->periodo, k->prazo);
-    printf("  eventos: %d", k->neventos);
-    for (int j = 0; j < k->neventos; j++) printf("%s%s", j ? " | " : ": ", k->eventos[j]);
-    putchar('\n');
-    printf("  estado: %s\n", estado_descricao(k));
-    if (k->restante > 0)
-        printf("  prioridade (menor = mais prioritária): nominal %d, ativa %d\n", k->prio_nominal, k->prio_ativa);
-    printf("  ativações: %d chegaram, %d concluídas (de %d)\n", k->liberadas, k->concluidas, MAX_ATIVACOES);
-    if (k->restante > 0) {
-        printf("  ativação atual: nº %d, chegou em %d, deadline em %d, faltam %d tick(s)%s\n",
-               k->concluidas + 1, k->chegada_atual, k->deadline_abs, k->restante,
-               (k->perdas & (1u << k->concluidas)) ? " — PRAZO PERDIDO" : "");
-        if (k->liberadas - k->concluidas > 1)
-            printf("  ativações acumuladas esperando: %d\n", k->liberadas - k->concluidas - 1);
+    printf("  tipo: %s\n", tipo_nome(k->tipo, k->srv));
+    if (k->tipo == TIPO_ESPORADICA) {
+        printf("  ocorrências (intervalo mínimo %d):", -k->periodo);
+        for (int j = 0; j < k->total_ativacoes; j++) printf(" %d", tcb_chegada(k, j));
+        putchar('\n');
+    } else {
+        printf("  eventos: %d", k->neventos);
+        for (int j = 0; j < k->neventos; j++) printf("%s%s", j ? " | " : ": ", k->eventos[j]);
+        putchar('\n');
     }
-    if (k->liberadas < MAX_ATIVACOES && k->estado != T_TERMINADA)
-        printf("  próxima chegada: instante %d\n", k->proxima_chegada);
+    printf("  estado: %s\n", estado_descricao(k));
+    if (tcb_eh_servidor(k)) {
+        /* O servidor não tem ativações: o que interessa é a capacidade e
+         * qual aperiódica ele está executando. */
+        if (k->srv != SRV_BS) printf("  capacidade: %d de %d tick(s)\n", k->capacidade, k->duracao);
+        if (k->atendendo >= 0) printf("  executando a aperiódica: %s\n", s->atual.tarefas[k->atendendo].id);
+        if (k->estado != T_TERMINADA && k->liberadas > 0 && (k->srv == SRV_PS || k->srv == SRV_DS))
+            printf("  próxima recarga (início do período): instante %d\n", k->proxima_chegada);
+        if (k->srv == SRV_SS) {
+            if (k->ss_inicio >= 0)
+                printf("  intervalo ativo desde %d (consumiu %d; RT = %d)\n", k->ss_inicio, k->ss_consumido,
+                       k->ss_inicio + k->periodo);
+            for (int r = 0; r < k->nrecargas; r++)
+                printf("  recarga agendada: +%d no instante %d\n", k->recarga_qtd[r], k->recarga_inst[r]);
+        }
+        if (k->estado == T_PRONTA || k->estado == T_EXECUTANDO)
+            printf("  prioridade (menor = mais prioritária): nominal %d, ativa %d\n", k->prio_nominal, k->prio_ativa);
+    } else {
+        if (k->restante > 0 && !tcb_eh_aperiodica(k))
+            printf("  prioridade (menor = mais prioritária): nominal %d, ativa %d\n", k->prio_nominal, k->prio_ativa);
+        printf("  ativações: %d chegaram, %d concluídas (de %d)\n", k->liberadas, k->concluidas, k->total_ativacoes);
+        if (k->restante > 0) {
+            char dl[24] = "sem prazo";
+            if (k->deadline_abs >= 0) snprintf(dl, sizeof dl, "deadline em %d", k->deadline_abs);
+            printf("  ativação atual: nº %d, chegou em %d, %s, faltam %d tick(s)%s\n",
+                   k->concluidas + 1, k->chegada_atual, dl, k->restante,
+                   tcb_prazo_perdido(k) ? " — PRAZO PERDIDO" : "");
+            if (k->liberadas - k->concluidas > 1)
+                printf("  ativações acumuladas esperando: %d\n", k->liberadas - k->concluidas - 1);
+            if (tcb_eh_aperiodica(k))
+                printf("  servidor: %s\n", k->servidor >= 0 ? s->atual.tarefas[k->servidor].id
+                                                            : "nenhum (esperando na fila de aperiódicas)");
+        }
+        if (k->liberadas < k->total_ativacoes && k->estado != T_TERMINADA)
+            printf("  próxima chegada: instante %d\n", k->proxima_chegada);
+    }
     printf("  CPU no último tick: %s", k->cpu >= 0 ? "" : "nenhuma\n");
     if (k->cpu >= 0) printf("CPU%d (quantum usado %d/%d)\n", k->cpu, k->quantum_usado, s->atual.quantum);
     printf("  estatísticas: executou %d, esperou %d, suspensa %d tick(s); %d preempção(ões), "
@@ -600,8 +635,10 @@ static void estado_sistema(const Simulador *s) {
     int *ordem = gantt_ordem(e);
     for (int r = e->n - 1; r >= 0; r--) {
         const TCB *k = &e->tarefas[ordem[r]];
-        printf("  %*s%s %-27s %4d/%-2d ", folga(k->id, 6), "", k->id, estado_descricao(k), k->concluidas, MAX_ATIVACOES);
-        if (k->restante > 0) printf("%8d %8d ", k->restante, k->deadline_abs);
+        char ativ[24];
+        tcb_texto_ativacoes(k, ativ, sizeof ativ);
+        printf("  %*s%s %-27s %s ", folga(k->id, 6), "", k->id, estado_descricao(k), ativ);
+        if (k->restante > 0 && !tcb_eh_servidor(k)) printf("%8d %8d ", k->restante, k->deadline_abs);
         else printf("%8s %8s ", "-", "-");
         if (k->cpu >= 0) printf("%5d ", k->cpu);
         else printf("%5s ", "-");
@@ -623,12 +660,15 @@ static void resumo_tick(const Simulador *s) {
     char rot[ID_MAX + 8];
     printf("Tick %d:", t);
     for (int c = 0; c < s->ncpus_col[t]; c++) {
-        int quem = -1;
-        for (int i = 0; i < e->n; i++)
-            if (sim_cpu_celula(s, t, i) == c) quem = i;
+        int quem = sim_ocupante_cpu(s, t, c);
         if (quem >= 0) {
             id_rotulo(e->tarefas[quem].id, todos_inteiros, rot, sizeof rot);
             printf("  CPU%d=%s", c, rot);
+            int sv = sim_servidor_cpu(s, t, c);   /* aperiódica executada por um servidor */
+            if (sv >= 0 && sv != quem) {
+                id_rotulo(e->tarefas[sv].id, todos_inteiros, rot, sizeof rot);
+                printf("(%s)", rot);
+            }
         } else {
             printf("  CPU%d=desligada", c);
         }
@@ -786,7 +826,8 @@ static void adicionar_tarefa(Simulador *s, Config *extras, char *msg, size_t tam
     for (int i = 0; i < e->n; i++) ids[i] = e->tarefas[i].id;
     CtxIds c = {ids, e->n, -1};
     TarefaCfg t = {"", config_cor_padrao(e->n), e->t, PADRAO_DURACAO,
-                   PADRAO_PERIODO, PADRAO_PERIODO, NULL, 0, NULL, 0};
+                   PADRAO_PERIODO, PADRAO_PERIODO, NULL, 0, NULL, 0,
+                   TIPO_PERIODICA, SRV_NENHUM, NULL, 0};
     id_sugerir(ids, e->n, t.id, sizeof t.id);
     char ev[512];
     int min = e->t;

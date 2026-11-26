@@ -17,6 +17,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* As três células em que a tarefa ocupa uma CPU: periódica executando,
+ * servidor executando e aperiódica executando por um servidor (Projeto B).
+ * Usada pelos três desenhos para o que vale para todas (o nº da CPU). */
+static bool cel_executando(CelulaGantt c) {
+    return c == G_EXEC || c == G_SERVIDOR || c == G_APERIODICA;
+}
+
 /* ===========================================================================
  * Seção gantt_svg.c (originalmente src/gantt/gantt_svg.c)
  * =========================================================================== */
@@ -250,7 +257,7 @@ bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char
             int t2 = t + 1;
             while (t2 < T && sim_celula(s, t2, i) == c && sim_cpu_celula(s, t2, i) == cpu) t2++;
             int x = margem + t * cw, w = (t2 - t) * cw;
-            if (c == G_EXEC) {
+            if (cel_executando(c)) {
                 fprintf(f, "<rect class=\"exec\" x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" fill=\"#%06X\"/>\n",
                         x, yb, w, ALT_BARRA, k->cor);
                 if (w >= 10) {
@@ -294,18 +301,10 @@ bool gantt_svg(const Simulador *s, const char *caminho, const char *titulo, char
         int y = y_cpus + c * ALT_CPU;
         fprintf(f, "<text class=\"rot\" x=\"%d\" y=\"%d\">CPU%d</text>\n", margem - 10, y + 14, c);
         for (int t = 0; t < T;) {
-            int quem = -1;
-            for (int i = 0; i < n; i++)
-                if (sim_cpu_celula(s, t, i) == c) { quem = i; break; }
+            int quem = sim_ocupante_cpu(s, t, c);
             bool existe = c < s->ncpus_col[t];
             int t2 = t + 1;
-            while (t2 < T && (c < s->ncpus_col[t2]) == existe) {
-                int q2 = -1;
-                for (int i = 0; i < n; i++)
-                    if (sim_cpu_celula(s, t2, i) == c) { q2 = i; break; }
-                if (q2 != quem) break;
-                t2++;
-            }
+            while (t2 < T && (c < s->ncpus_col[t2]) == existe && sim_ocupante_cpu(s, t2, c) == quem) t2++;
             int x = margem + t * cw, w = (t2 - t) * cw;
             if (!existe) {
                 /* CPU não existia nestes ticks (quantidade alterada em edição) */
@@ -514,11 +513,8 @@ static void rotulo_alinhado(const char *rot, int largura) {
 static int *ocupacao(const Simulador *s, int ini, int fim) {
     int *oc = xmalloc((size_t)(fim - ini) * MAX_CPUS * sizeof(int));
     for (int t = ini; t < fim; t++) {
-        for (int c = 0; c < MAX_CPUS; c++) oc[(t - ini) * MAX_CPUS + c] = -1;
-        for (int i = 0; i < s->atual.n; i++) {
-            int c = sim_cpu_celula(s, t, i);
-            if (c >= 0 && c < MAX_CPUS) oc[(t - ini) * MAX_CPUS + c] = i;
-        }
+        /* sim_ocupante_cpu: com servidor, a CPU mostra a aperiódica */
+        for (int c = 0; c < MAX_CPUS; c++) oc[(t - ini) * MAX_CPUS + c] = sim_ocupante_cpu(s, t, c);
     }
     return oc;
 }
@@ -689,6 +685,8 @@ void gantt_tui(const Simulador *s, int ini, int fim) {
         for (int t = ini; t < fim; t++) {
             unsigned m = mask[(size_t)(t - ini) * n + i];
             switch (sim_celula(s, t, i)) {
+            case G_SERVIDOR:
+            case G_APERIODICA:
             case G_EXEC:
                 /* fundo = cor da tarefa; texto = número da CPU (ou '?' se
                  * a tarefa foi escolhida por sorteio neste tick). */
@@ -841,6 +839,14 @@ void gantt_texto(const Simulador *s) {
             if (i >= 0) {
                 id_rotulo(e->tarefas[i].id, todos_inteiros, rot, sizeof rot);
                 printf(" [%d,%d)%s", t, t2, rot);
+                /* aperiódica executada por um servidor: "[10,12)C(PS1)". O
+                 * trecho é o mesmo porque o servidor fica com ela até o fim
+                 * (ou até ser preemptado, o que também muda o ocupante). */
+                int sv = sim_servidor_cpu(s, t, c);
+                if (sv >= 0 && sv != i) {
+                    id_rotulo(e->tarefas[sv].id, todos_inteiros, rot, sizeof rot);
+                    printf("(%s)", rot);
+                }
             } else {
                 printf(" [%d,%d)desligada", t, t2);
             }
@@ -854,7 +860,18 @@ void gantt_texto(const Simulador *s) {
         const Evento *v = &s->ev[i];
         if (v->tipo == EV_PREEMPCAO || v->tipo == EV_FIM_QUANTUM || v->tipo == EV_CHEGADA || v->tipo == EV_FIM_ATIVACAO) continue;
         id_rotulo(e->tarefas[v->tarefa].id, todos_inteiros, rot, sizeof rot);
-        printf("  t=%d %s %s (ativação %d)", v->instante, rot, evento_nome(v->tipo), v->ativacao + 1);
+        /* Eventos dos servidores (Projeto B) dizem o dado extra (aux). */
+        if (v->tipo == EV_RECARGA || v->tipo == EV_DESCARTE) {
+            printf("  t=%d %s %s (%d tick(s))\n", v->instante, rot, evento_nome(v->tipo), v->aux);
+            continue;
+        }
+        printf("  t=%d %s %s", v->instante, rot, evento_nome(v->tipo));
+        if (v->tipo == EV_ATENDIMENTO && v->aux >= 0) {
+            id_rotulo(e->tarefas[v->aux].id, todos_inteiros, rot, sizeof rot);
+            printf(" %s", rot);
+        }
+        /* servidor não tem "ativações" (termina junto com a última tarefa) */
+        if (!tcb_eh_servidor(&e->tarefas[v->tarefa])) printf(" (ativação %d)", v->ativacao + 1);
         if (v->cpu >= 0) printf(" CPU%d", v->cpu);
         putchar('\n');
     }
@@ -1016,7 +1033,7 @@ void gantt_gfx(Tela *t, const Simulador *s, VistaGantt *v) {
             int c2 = c + 1;
             while (c2 < t_fim && sim_celula(s, c2, i) == g && sim_cpu_celula(s, c2, i) == cpu) c2++;
             int x = x0 + (c - v->t_ini) * v->cw, w = (c2 - c) * v->cw;
-            if (g == G_EXEC) {
+            if (cel_executando(g)) {
                 tela_ret(t, x, yb, w, ALT_BARRA, k->cor);
                 tela_moldura(t, x, yb, w, ALT_BARRA, 0x222222);
                 char rot[16];
@@ -1056,18 +1073,10 @@ void gantt_gfx(Tela *t, const Simulador *s, VistaGantt *v) {
     for (int c = 0; c < ncpu; c++) {
         int y = y_cpus + c * ALT_CPU;
         for (int tk = v->t_ini; tk < t_fim;) {
-            int quem = -1;
-            for (int i = 0; i < n; i++)
-                if (sim_cpu_celula(s, tk, i) == c) { quem = i; break; }
+            int quem = sim_ocupante_cpu(s, tk, c);
             bool existe = c < s->ncpus_col[tk];
             int t2 = tk + 1;
-            while (t2 < t_fim && (c < s->ncpus_col[t2]) == existe) {
-                int q2 = -1;
-                for (int i = 0; i < n; i++)
-                    if (sim_cpu_celula(s, t2, i) == c) { q2 = i; break; }
-                if (q2 != quem) break;
-                t2++;
-            }
+            while (t2 < t_fim && (c < s->ncpus_col[t2]) == existe && sim_ocupante_cpu(s, t2, c) == quem) t2++;
             int x = x0 + (tk - v->t_ini) * v->cw, w = (t2 - tk) * v->cw;
             if (!existe) {
                 /* a CPU não existia (quantidade alterada durante a simulação) */

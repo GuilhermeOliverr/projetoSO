@@ -40,7 +40,13 @@ typedef enum {
     EV_SORTEIO,        // 4: Evento de aplicação do critério 5 de desempate por sorteio determinístico (sinalizado com ?)
     EV_PREEMPCAO,      // 5: Evento de preempção (tarefa é retirada da CPU para dar lugar a outra mais prioritária)
     EV_FIM_QUANTUM,    // 6: Evento de esgotamento da fatia de tempo (quantum) da tarefa em execução
-    EV_QTD             // 7: Quantidade total de categorias de eventos definidas na enumeração
+    /* Projeto B (servidores). Na linha do servidor, EV_CHEGADA é a ENTRADA
+     * do servidor no sistema (no ingresso), desenhada com um marcador
+     * próprio. */
+    EV_RECARGA,        // 7: Recarga da capacidade de um servidor (PS/DS: início do período; SS: no instante RT); aux = quanto voltou
+    EV_ATENDIMENTO,    // 8: Uma aperiódica/esporádica saiu da fila e entrou num servidor; aux = índice do servidor
+    EV_DESCARTE,       // 9: O PS não achou aperiódica pendente e perdeu o que restava da capacidade; aux = quanto perdeu
+    EV_QTD             // Quantidade total de categorias de eventos definidas na enumeração
 } TipoEvento;
 
 // Início da estrutura que registra um evento ocorrido com seu contexto completo
@@ -51,10 +57,15 @@ typedef struct {
     int tarefa;        // Índice da tarefa associada ao evento dentro do vetor de TCBs
     int ativacao;      // Número da ativação corrente da tarefa no momento do evento (de 0 a 9)
     int cpu;          // Identificador da CPU envolvida na ocorrência do evento (-1 se ocorreu na fila de prontos)
+    int aux;          // Dado extra dos eventos de servidor (ver EV_RECARGA, EV_ATENDIMENTO, EV_DESCARTE); -1 nos outros
 } Evento;
 
-// Enumeração dos estados visuais de uma célula da grade do Gantt (Vazio, Na Fila, Executando, Suspensa)
-typedef enum { G_VAZIO, G_PRONTA, G_EXEC, G_SUSPENSA } CelulaGantt;
+/* Estados visuais de uma célula da grade do Gantt (Vazio, Na Fila,
+ * Executando, Suspensa). Os dois últimos são do Projeto B (req. 4 da parte
+ * B: ver no Gantt quando o servidor executa e quando a aperiódica executa):
+ *   G_SERVIDOR:  o servidor está executando (alguma aperiódica por ele);
+ *   G_APERIODICA: a aperiódica/esporádica está executando, por um servidor. */
+typedef enum { G_VAZIO, G_PRONTA, G_EXEC, G_SUSPENSA, G_SERVIDOR, G_APERIODICA } CelulaGantt;
 
 // Início da estrutura que armazena o estado instantâneo (Snapshot) do sistema a cada tick
 typedef struct {
@@ -107,11 +118,17 @@ void tcb_iniciar(TCB *k, const TarefaCfg *t);    // Inicializa a estrutura TCB '
 CelulaGantt sim_celula(const Simulador *s, int tick, int tarefa);    // Consulta e retorna o estado visual da célula (Vazio, Pronta, Executando, Suspensa) no Gantt
 int sim_cpu_celula(const Simulador *s, int tick, int tarefa);    // Consulta e retorna o índice da CPU em que a 'tarefa' executou no 'tick' (-1 se nenhuma)
 
+// Quem ocupou a CPU 'c' no 'tick' (-1 = desligada). Quando um servidor executa uma aperiódica, os dois usam a mesma CPU: devolve a aperiódica (é o trabalho feito)
+int sim_ocupante_cpu(const Simulador *s, int tick, int c);
+
+// O servidor que estava executando na CPU 'c' no 'tick' (-1 se nenhum)
+int sim_servidor_cpu(const Simulador *s, int tick, int c);
+
 int sim_indice(const Estado *e, const char *id);    // Busca o índice da tarefa no vetor de TCBs a partir do seu 'id' (id_iguais); retorna o ÍNDICE, ou -1 se não encontrar
 
 bool sim_ids_inteiros(const Estado *e);    // true se todos os ids do estado atual são inteiros (rótulos "T<id>"; ver id_rotulo)
 
-double sim_utilizacao(const Estado *e);    // Calcula a taxa de utilização total do processador U = soma(Duração / Período) para o conjunto de tarefas
+double sim_utilizacao(const Estado *e);    // Utilização U = soma(C/P) das periódicas e dos servidores PS/DS/SS (ver tarefa_utilizacao)
 double sim_limite_rm(int n);    // Calcula o limite teórico de escalonabilidade do teste de Liu & Layland para RM: n*(2^(1/n) - 1)
 
 void estado_copiar(Estado *dst, const Estado *src);    // Copia profundamente o estado 'src' para o estado 'dst' (alocando novos TCBs)
