@@ -1441,8 +1441,34 @@ const char *valida_id(const char *v, const char *const *ids, int n, int proprio)
 //em que a próxima ativação da tarefa deve ser liberada na simulação.
 void edicao_periodo(TCB *k, int v) {
     k->periodo = v;
+    /* Servidor: `liberadas` conta períodos (não há chegadas[] além do 0); o
+     * próximo período (a próxima recarga do PS/DS) conta do início do atual. */
+    if (tcb_eh_servidor(k)) {
+        if (k->liberadas > 0) k->proxima_chegada = k->chegada_atual + v;
+        return;
+    }
     if (k->liberadas > 0 && k->liberadas < MAX_ATIVACOES)
         k->proxima_chegada = k->chegadas[k->liberadas - 1] + v;
+}
+
+//Projeto B: só tarefas periódicas e servidores têm período editável. Aperiódica não tem período,
+//e o |período| da esporádica é o intervalo mínimo, conferido na carga contra as ocorrências (que não mudam).
+//Retorna NULL se o período da tarefa pode ser editado, ou o motivo.
+const char *valida_periodo_editavel(const TCB *k) {
+    if (k->tipo == TIPO_APERIODICA) return "a tarefa é aperiódica: não tem período (chega uma vez, no ingresso)";
+    if (k->tipo == TIPO_ESPORADICA)
+        return "a tarefa é esporádica: o |período| é o intervalo mínimo entre as ocorrências, conferido na carga "
+               "contra a lista de ocorrências, e não muda durante a simulação";
+    return NULL;
+}
+
+//Muda a duração; no servidor a duração é a capacidade cheia: a capacidade que resta não pode passar dela.
+void edicao_duracao(TCB *k, int v) {
+    k->duracao = v;
+    if (tcb_eh_servidor(k) && k->capacidade > v) {
+        k->capacidade = v;
+        k->restante = v;
+    }
 }
 
 //Aplica um novo prazo relativo 'v' na tarefa 'k'. Se a tarefa estiver com uma ativação em andamento (restante > 0), reajusta imediatamente o seu deadline absoluto.
@@ -1455,6 +1481,8 @@ void edicao_prazo(TCB *k, int v) {
 void edicao_ingresso(TCB *k, int v) {
     k->ingresso = v;
     k->proxima_chegada = v;
+    /* esporádica: as ocorrências são relativas ao ingresso, então a 1ª muda junto */
+    if (k->tipo == TIPO_ESPORADICA && k->total_ativacoes > 0) k->proxima_chegada = v + k->ocorrencias[0];
 }
 
 //Alterna a tarefa 'k' entre o estado suspenso manualmente pelo usuário (SUSP_USUARIO) e o seu estado normal de execução/espera. 

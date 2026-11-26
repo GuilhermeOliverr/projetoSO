@@ -483,7 +483,10 @@ static void ler_linha_tarefa(Ctx *c, char *s, IdsVistos *vistos) {
          * era int). A mensagem diz com qual id da outra linha ele bate. */
         for (int i = 0; i < vistos->n; i++) {
             if (!id_iguais(vistos->id[i], f[0])) continue;
-            if (!strcmp(vistos->id[i], f[0]))
+            if (vistos->linha[i] == 0)   /* linha digitada (modo manual): o id é de uma tarefa que já existe */
+                msg_add(&cfg->erros, "%s:%d: campo 'id' = '%s': já existe uma tarefa com o id %s", c->arq, c->linha,
+                        f[0], vistos->id[i]);
+            else if (!strcmp(vistos->id[i], f[0]))
                 msg_add(&cfg->erros, "%s:%d: campo 'id' = '%s': id repetido (já usado na linha %d)",
                         c->arq, c->linha, f[0], vistos->linha[i]);
             else
@@ -631,6 +634,42 @@ static void ler_linha_tarefa(Ctx *c, char *s, IdsVistos *vistos) {
         msg_add(&cfg->avisos, "%s:%d: tarefa %s tem %d evento(s) em lista_eventos (%.60s%s): "
                 "lidos e guardados", c->arq, c->linha, t.id, nova->nev, nova->eventos,
                 strlen(nova->eventos) > 60 ? "..." : "");
+}
+
+/* Modo manual de inserção (Projeto B): a interface monta a mesma linha que a
+ * tarefa teria no arquivo .txt (config_linha_tarefa) e ela é lida AQUI, pela
+ * mesma ler_linha_tarefa do arquivo (sugestão do professor: o modo manual
+ * gera o mesmo texto de um .txt). Assim uma tarefa digitada passa
+ * exatamente pelas mesmas regras de uma lida do arquivo, inclusive o
+ * intervalo mínimo da esporádica, sem duplicar validação nas duas
+ * interfaces. `ids` são os ids que já existem (`proprio` = o da tarefa
+ * editada, que não conta como repetido; -1 = tarefa nova). A tarefa lida fica
+ * em tmp->tarefas[0]; erros e avisos em tmp->erros e tmp->avisos. Quem chama
+ * libera `tmp` com config_liberar. */
+bool config_ler_linha_manual(const char *linha, const char *const *ids, int nids, int proprio, Config *tmp) {
+    config_padrao(tmp);
+    tmp->caminho = xstrdup("linha digitada");
+    Ctx c = {tmp, tmp->caminho, 1};
+    IdsVistos vistos = {NULL, NULL, 0, 0};
+    vistos.cap = nids > 0 ? nids : 1;
+    vistos.id = xmalloc((size_t)vistos.cap * sizeof *vistos.id);
+    vistos.linha = xmalloc((size_t)vistos.cap * sizeof *vistos.linha);
+    for (int i = 0; i < nids; i++) {
+        if (i == proprio) continue;
+        vistos.id[vistos.n] = ids[i];
+        vistos.linha[vistos.n] = 0;   /* 0 = já existe (não veio de uma linha do arquivo) */
+        vistos.n++;
+    }
+    char *copia = xstrdup(linha);
+    char *s = str_trim(copia);
+    if (!*s) msg_add(&tmp->erros, "linha vazia: informe id;cor;ingresso;duracao;periodo;prazo;lista_eventos");
+    else ler_linha_tarefa(&c, s, &vistos);
+    free(copia);
+    free(vistos.id);
+    free(vistos.linha);
+    if (tmp->erros.n == 0 && tmp->n == 0 && tmp->avisos.n == 0)
+        msg_add(&tmp->erros, "a tarefa não foi aceita");
+    return tmp->erros.n == 0 && tmp->n == 1;
 }
 
 /* =========================================================================
@@ -1070,6 +1109,8 @@ static bool prefixo_igual(const char *a, const char *b, size_t n) {
     return true;
 }
 
+static void id_sugerir_comum(const char *const *ids, int n, char *dst, size_t tam);
+
 static bool id_em_uso(const char *const *ids, int n, const char *id) {
     for (int i = 0; i < n; i++)
         if (id_iguais(ids[i], id)) return true;
@@ -1089,7 +1130,21 @@ static bool id_em_uso(const char *const *ids, int n, const char *id) {
  *      que já estão em uso (id_iguais).
  * A sugestão é sempre conferida contra os ids existentes, então nunca é um
  * id repetido. */
-void id_sugerir(const char *const *ids, int n, char *dst, size_t tam) {
+void id_sugerir(const char *const *todos_ids, int ntodos, char *dst, size_t tam) {
+    /* Projeto B: os ids de servidor (PS1...) ficam de fora da regra, senão
+     * "1, 2, PS1" sugeriria "PS2" para uma tarefa comum, que é um id de
+     * servidor. Nenhuma sugestão daqui é id de servidor (inteiro, ou o
+     * prefixo de ids que não são de servidor), então não colide com eles. */
+    const char **ids = xmalloc((size_t)(ntodos ? ntodos : 1) * sizeof *ids);
+    int n = 0;
+    for (int i = 0; i < ntodos; i++)
+        if (id_servidor(todos_ids[i]) == SRV_NENHUM) ids[n++] = todos_ids[i];
+    id_sugerir_comum(ids, n, dst, tam);
+    free(ids);
+}
+
+/* A sugestão em si, só com os ids que não são de servidor. */
+static void id_sugerir_comum(const char *const *ids, int n, char *dst, size_t tam) {
     bool todos = true, estourou = false;
     int m = 0;
     for (int i = 0; i < n && todos; i++) {
@@ -1514,6 +1569,21 @@ void teste_resumo(const ItemTeste *v, int n, int alg, int ncpus, char *buf, size
                  r.u_esp, r.banda);
     if (!g_teste_escalonabilidade && l > 0 && strlen(buf) + 1 < tam)
         snprintf(buf + strlen(buf), tam - strlen(buf), " (teste desligado com --sem-teste)");
+}
+
+/* Sugestão de id para um servidor novo: a sigla + (maior número já usado
+ * com essa sigla + 1), começando em 1 (PS1, PS2, ...), pulando ids em uso. */
+void id_sugerir_servidor(TipoServidor srv, const char *const *ids, int n, char *dst, size_t tam) {
+    long maior = 0;
+    for (int i = 0; i < n; i++) {
+        if (id_servidor(ids[i]) != srv) continue;
+        long v = strtol(ids[i] + 2, NULL, 10);
+        if (v > maior && v < 1000000) maior = v;
+    }
+    for (long k = maior + 1;; k++) {   /* termina: no máximo n ids estão em uso */
+        snprintf(dst, tam, "%s%ld", servidor_sigla(srv), k);
+        if (!id_em_uso(ids, n, dst)) return;
+    }
 }
 
 /* ---------------------------------------------------------------- terminal */

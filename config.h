@@ -141,6 +141,13 @@ const char *config_intervalo_minimo(const int *oc, int n, int minimo, char *buf,
 // Monta a linha do arquivo de configuração de uma tarefa (id;cor;ingresso;duracao;periodo;prazo;lista_eventos), como no .txt
 void config_linha_tarefa(const TarefaCfg *t, char *buf, size_t tam);
 
+// Modo manual: lê UMA linha de tarefa com as regras do arquivo. true se a tarefa foi aceita (fica em tmp->tarefas[0]);
+// erros e avisos em tmp->erros/avisos. 'ids' = ids já em uso ('proprio' = índice a ignorar, -1 = nenhum). Libere tmp com config_liberar
+bool config_ler_linha_manual(const char *linha, const char *const *ids, int nids, int proprio, Config *tmp);
+
+// Sugere um id para um servidor novo do tipo 'srv': PS1, PS2... (sem repetir os 'n' ids de 'ids')
+void id_sugerir_servidor(TipoServidor srv, const char *const *ids, int n, char *dst, size_t tam);
+
 /* --- Teste de escalonabilidade (req. 3 da parte B) ------------------------
  * Roda antes de uma tarefa ser aceita: ao carregar o arquivo e ao adicionar
  * uma tarefa pela interface. Só olha o que a tarefa "pesa", então serve

@@ -81,11 +81,29 @@ roda_b tests/validos/26_esporadica_acima_da_capacidade.txt > "$TMP/out"
 grep -q 'tarefa E impedida de ser escalonada: as esporádicas pediriam, no pior caso, U = 0.600.*limite = 0.100' "$TMP/out" \
     && ok "esporádica que pede mais (3/5) do que o servidor oferece (1/10) é impedida" \
     || falha "teste da esporádica contra a capacidade dos servidores" "$(grep impedida "$TMP/out" | head -1)"
-# X: C = 50, P = 100 (id, cor, ingresso, duração, período, prazo, eventos)
-printf '+\nX\n\n\n50\n100\n\n\nq\n' | $BIN exemplos/fig2_5_rm.txt --modo passo --sem-cor > "$TMP/out" 2>&1
+# X: periódica (Enter no tipo), C = 50, P = 100 (tipo, id, cor, ingresso, duração, período, prazo, eventos)
+printf '+\n\nX\n\n\n50\n100\n\n\nq\n' | $BIN exemplos/fig2_5_rm.txt --modo passo --sem-cor > "$TMP/out" 2>&1
 grep -q 'tarefa X impedida de ser escalonada: com ela a utilização seria U = 1.252' "$TMP/out" \
     && ok "tarefa adicionada no passo a passo também passa pelo teste (U = 1,252, e a análise de tempo de resposta confirma)" \
     || falha "teste ao adicionar tarefa" "$(grep -i impedida "$TMP/out" | head -1)"
+
+echo "== Inserção manual (parte B): seletor de tipo e a mesma linha de um .txt"
+printf 'RM;2;1\n1;E74C3C;0;2;10;10\nPS1;2ECC71;0;2;5;5\n' > "$TMP/srv.txt"
+# n -> e (esporádica): id E, cor, ingresso, C = 1, intervalo mínimo 5, prazo,
+# ocorrências 0,3 (recusada) e 0,5,12; n -> a (aperiódica) A, C = 3, sem
+# prazo; n -> l (digitar a linha do .txt) Z.
+printf 'n\ne\nE\n\n\n1\n5\n\n0,3\n0,5,12\nn\na\nA\n\n\n3\n\n\nn\nl\nZ;FF0000;0;1;-8;;0,8,16\nq\n' \
+    | $BIN "$TMP/srv.txt" --terminal --sem-cor > "$TMP/out" 2>&1
+grep -q 'Linha gerada (o mesmo texto de um arquivo .txt): E;[0-9A-F]*;0;1;-5;5;0,5,12' "$TMP/out" \
+    && grep -q 'Tarefa E (esporádica) adicionada' "$TMP/out" \
+    && ok "esporádica pelo formulário: várias ocorrências e a linha do .txt gerada" \
+    || falha "esporádica pelo formulário" "$(grep -E 'Linha gerada|erro' "$TMP/out" | head -2)"
+grep -q 'as ocorrências 0 e 3 estão a 3 tick(s) uma da outra, menos que o intervalo mínimo' "$TMP/out" \
+    && ok "intervalo mínimo conferido também no modo manual" || falha "intervalo mínimo no modo manual"
+grep -q 'Linha gerada .*: A;[0-9A-F]*;0;3;0;;' "$TMP/out" && grep -q 'Tarefa A (aperiódica) adicionada' "$TMP/out" \
+    && ok "aperiódica sem prazo: período 0 e prazo vazio na linha" || falha "aperiódica pelo formulário"
+grep -q 'Tarefa Z (esporádica) adicionada' "$TMP/out" && ok "linha do .txt digitada direto, lida pelas regras do arquivo" \
+    || falha "linha digitada" "$(grep -E 'erro' "$TMP/out" | tail -2)"
 
 echo "== Figura 2.5 (tabela 2.1 com RM)"
 roda exemplos/fig2_5_rm.txt > "$TMP/out"
@@ -225,8 +243,8 @@ printf 't 0\n\nt T0\n\nq\n' | $BIN tests/validos/22_ids_misturados_0_e_T0.txt --
 grep -q 'Tarefa 0 (TCB)' "$TMP/out" && grep -q 'Tarefa T0 (TCB)' "$TMP/out" && ok "'t 0' e 't T0' são tarefas diferentes" \
     || falha "'t 0' / 't T0'"
 # Tarefa de id texto adicionada na simulação some ao voltar para antes dela.
-printf 'n 5\n+\nX\n\n\n\n\n\n\nt X\n\np 3\nt X\nq\n' | $BIN exemplos/fig2_5_rm.txt --modo passo --sem-teste --sem-cor > "$TMP/out" 2>&1
-grep -q 'Tarefa X adicionada' "$TMP/out" && grep -q 'Tarefa X (TCB)' "$TMP/out" \
+printf 'n 5\n+\n\nX\n\n\n\n\n\n\nt X\n\np 3\nt X\nq\n' | $BIN exemplos/fig2_5_rm.txt --modo passo --sem-teste --sem-cor > "$TMP/out" 2>&1
+grep -q 'Tarefa X (periódica) adicionada' "$TMP/out" && grep -q 'Tarefa X (TCB)' "$TMP/out" \
     && grep -q 'não existe tarefa com id X neste instante' "$TMP/out" \
     && ok "tarefa 'X' adicionada no passo a passo e desfeita ao voltar no tempo" || falha "adicionar tarefa de id texto"
 
