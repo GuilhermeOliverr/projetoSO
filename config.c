@@ -722,7 +722,7 @@ static void admitir_tarefas(Config *cfg) {
             const TarefaCfg *t = &cfg->tarefas[i];
             bool aper = t->tipo == TIPO_APERIODICA || t->tipo == TIPO_ESPORADICA;
             if (aper != (fase == 1)) continue;
-            ItemTeste it = {t->tipo, t->srv, t->duracao, t->periodo};
+            ItemTeste it = {t->tipo, t->srv, t->duracao, t->periodo, t->prazo, t->id};
             if (teste_admitir(ok, nok, it, cfg->algoritmo, cfg->ncpus, motivo, sizeof motivo)) {
                 msg_add(&cfg->avisos, "%s:%d: tarefa %s impedida de ser escalonada: %s", cfg->caminho, t->linha,
                         t->id, motivo);
@@ -1385,12 +1385,63 @@ void teste_calcular(const ItemTeste *v, int n, int alg, int ncpus, ResultadoTest
     r->banda = banda + (tem_bs && m > r->u ? m - r->u : 0.0);
 }
 
+/* Análise de tempo de resposta (seção 2.5 do capítulo), para o RM com 1 CPU.
+ * O teste de Liu & Layland é só SUFICIENTE: um conjunto acima do limite
+ * ainda pode ser escalonável (ex.: a figura 2.17, U = 0,879 > 0,780). Quando
+ * U passa do limite, esta análise decide de vez: para cada tarefa i,
+ *     R = C_i + soma, sobre as mais prioritárias j, de ceil((R + J_j)/P_j) C_j
+ * repetida até R parar de mudar; se R passa do prazo (ou do período, o que
+ * for menor), a tarefa i perde prazo no pior caso. Mais prioritária no RM =
+ * período menor; período igual conta como mais prioritária (lado seguro).
+ * J_j (jitter) é 0, exceto no DS: ele pode executar no fim de um período e
+ * de novo no começo do seguinte (o "efeito de execução adiada" do
+ * capítulo), o que equivale a um jitter de P - C. PS e SS entram como
+ * tarefas periódicas comuns; BS, aperiódicas e esporádicas não entram (não
+ * atrasam ninguém). Ex. da figura 2.6 com RM: B tem R = 25 + 3x10 = 55 > 50.
+ * Devolve -1 se todas cabem; senão o índice da 1ª que não cabe, com o R e o
+ * limite dela. */
+static int analise_resposta_rm(const ItemTeste *v, int n, long long *r_out, int *lim_out) {
+    for (int i = 0; i < n; i++) {
+        const ItemTeste *a = &v[i];
+        if (tarefa_utilizacao(a->tipo, a->srv, a->duracao, a->periodo) <= 0) continue;
+        int lim = a->prazo > 0 && a->prazo < a->periodo ? a->prazo : a->periodo;
+        long long r = a->duracao, ant = -1;
+        while (r != ant && r <= lim) {
+            ant = r;
+            r = a->duracao;
+            for (int j = 0; j < n; j++) {
+                const ItemTeste *b = &v[j];
+                if (j == i || b->periodo > a->periodo) continue;
+                if (tarefa_utilizacao(b->tipo, b->srv, b->duracao, b->periodo) <= 0) continue;
+                long long jit = b->srv == SRV_DS ? b->periodo - b->duracao : 0;
+                r += (ant + jit + b->periodo - 1) / b->periodo * b->duracao;   /* ceil((R + J)/P) * C */
+            }
+        }
+        if (r > lim) {
+            *r_out = r;
+            *lim_out = lim;
+            return i;
+        }
+    }
+    return -1;
+}
+
+/* A análise de tempo de resposta só vale para o RM com 1 CPU. */
+static bool usa_analise_resposta(int alg, int ncpus) {
+    const Escalonador *e = sched_obter(alg);
+    return e && str_ieq(e->nome, "RM") && ncpus == 1;
+}
+
 const char *teste_admitir(const ItemTeste *aceitas, int n, ItemTeste nova, int alg, int ncpus, char *buf, size_t tam) {
     ItemTeste *v = xmalloc((size_t)(n + 1) * sizeof *v);
     if (n) memcpy(v, aceitas, (size_t)n * sizeof *v);
     v[n] = nova;
     ResultadoTeste r;
     teste_calcular(v, n + 1, alg, ncpus, &r);
+    long long resp = 0;
+    int lim_resp = 0, falha = -1;
+    if (r.u > r.limite + FOLGA_TESTE && usa_analise_resposta(alg, ncpus))
+        falha = analise_resposta_rm(v, n + 1, &resp, &lim_resp);
     free(v);
     const Escalonador *e = sched_obter(alg);
     const char *nome = e ? e->nome : "?";
@@ -1409,12 +1460,20 @@ const char *teste_admitir(const ItemTeste *aceitas, int n, ItemTeste nova, int a
         }
         return NULL;
     }
-    if (g_teste_escalonabilidade && r.u > r.limite + FOLGA_TESTE) {
+    if (!g_teste_escalonabilidade || r.u <= r.limite + FOLGA_TESTE) return NULL;
+    if (!usa_analise_resposta(alg, ncpus)) {
         snprintf(buf, tam, "com ela a utilização seria U = %.3f, acima do limite %.3f (%s); algoritmo %s",
                  r.u, r.limite, r.regra, nome);
         return buf;
     }
-    return NULL;
+    if (falha < 0) return NULL;   /* acima do limite, mas a análise exata mostra que todas cabem */
+    /* O índice `falha` é do vetor com a nova no fim: n = a própria nova. */
+    char quem[ID_MAX + 40] = "ela";
+    if (falha != n) snprintf(quem, sizeof quem, "a tarefa %s, já aceita,", aceitas[falha].id ? aceitas[falha].id : "?");
+    snprintf(buf, tam, "com ela a utilização seria U = %.3f, acima do limite %.3f (%s), e a análise de tempo "
+             "de resposta (seção 2.5 do capítulo) confirma: %s teria tempo de resposta %lld > %d no pior caso; "
+             "algoritmo %s", r.u, r.limite, r.regra, quem, resp, lim_resp, nome);
+    return buf;
 }
 
 /* As tarefas da configuração no formato do teste (quem chama libera). */
@@ -1422,7 +1481,7 @@ ItemTeste *config_itens_teste(const Config *cfg) {
     ItemTeste *v = xmalloc((size_t)(cfg->n ? cfg->n : 1) * sizeof *v);
     for (int i = 0; i < cfg->n; i++) {
         const TarefaCfg *t = &cfg->tarefas[i];
-        v[i] = (ItemTeste){t->tipo, t->srv, t->duracao, t->periodo};
+        v[i] = (ItemTeste){t->tipo, t->srv, t->duracao, t->periodo, t->prazo, t->id};
     }
     return v;
 }
@@ -1430,7 +1489,7 @@ ItemTeste *config_itens_teste(const Config *cfg) {
 /* Teste para a tarefa `t` entrar na configuração (tela de configuração). */
 const char *config_admitir_tarefa(const Config *cfg, const TarefaCfg *t, char *buf, size_t tam) {
     ItemTeste *v = config_itens_teste(cfg);
-    const char *m = teste_admitir(v, cfg->n, (ItemTeste){t->tipo, t->srv, t->duracao, t->periodo}, cfg->algoritmo,
+    const char *m = teste_admitir(v, cfg->n, (ItemTeste){t->tipo, t->srv, t->duracao, t->periodo, t->prazo, t->id}, cfg->algoritmo,
                                   cfg->ncpus, buf, tam);
     free(v);
     return m;
@@ -1439,8 +1498,17 @@ const char *config_admitir_tarefa(const Config *cfg, const TarefaCfg *t, char *b
 void teste_resumo(const ItemTeste *v, int n, int alg, int ncpus, char *buf, size_t tam) {
     ResultadoTeste r;
     teste_calcular(v, n, alg, ncpus, &r);
+    const char *veredito = "escalonável";
+    if (r.u > r.limite + FOLGA_TESTE) {
+        long long resp;
+        int lim;
+        if (!usa_analise_resposta(alg, ncpus)) veredito = "NÃO passa no teste";
+        else if (analise_resposta_rm(v, n, &resp, &lim) < 0)
+            veredito = "acima do limite, mas escalonável pela análise de tempo de resposta";
+        else veredito = "NÃO escalonável (análise de tempo de resposta)";
+    }
     int l = snprintf(buf, tam, "Teste de escalonabilidade: U = %.3f, limite = %.3f (%s) -> %s", r.u, r.limite,
-                     r.regra, r.u <= r.limite + FOLGA_TESTE ? "escalonável" : "NÃO passa no teste");
+                     r.regra, veredito);
     if (r.u_esp > 0 && l > 0 && (size_t)l < tam)
         snprintf(buf + l, tam - (size_t)l, " | esporádicas: U = %.3f de %.3f oferecidos pelos servidores",
                  r.u_esp, r.banda);

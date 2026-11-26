@@ -148,7 +148,8 @@ void config_linha_tarefa(const TarefaCfg *t, char *buf, size_t tam);
 typedef struct {
     TipoTarefa tipo;
     TipoServidor srv;
-    int duracao, periodo;
+    int duracao, periodo, prazo;
+    const char *id;     // só para a mensagem dizer qual tarefa estoura o prazo
 } ItemTeste;
 
 /* Resultado do teste para um conjunto de tarefas. */

@@ -81,9 +81,10 @@ roda_b tests/validos/26_esporadica_acima_da_capacidade.txt > "$TMP/out"
 grep -q 'tarefa E impedida de ser escalonada: as esporádicas pediriam, no pior caso, U = 0.600.*limite = 0.100' "$TMP/out" \
     && ok "esporádica que pede mais (3/5) do que o servidor oferece (1/10) é impedida" \
     || falha "teste da esporádica contra a capacidade dos servidores" "$(grep impedida "$TMP/out" | head -1)"
-printf '+\nX\n\n\n\n\n\n\nq\n' | $BIN exemplos/fig2_5_rm.txt --modo passo --sem-cor > "$TMP/out" 2>&1
-grep -q 'tarefa X impedida de ser escalonada: com ela a utilização seria U = 0.952' "$TMP/out" \
-    && ok "tarefa adicionada no passo a passo também passa pelo teste (U 0,952 > 0,757)" \
+# X: C = 50, P = 100 (id, cor, ingresso, duração, período, prazo, eventos)
+printf '+\nX\n\n\n50\n100\n\n\nq\n' | $BIN exemplos/fig2_5_rm.txt --modo passo --sem-cor > "$TMP/out" 2>&1
+grep -q 'tarefa X impedida de ser escalonada: com ela a utilização seria U = 1.252' "$TMP/out" \
+    && ok "tarefa adicionada no passo a passo também passa pelo teste (U = 1,252, e a análise de tempo de resposta confirma)" \
     || falha "teste ao adicionar tarefa" "$(grep -i impedida "$TMP/out" | head -1)"
 
 echo "== Figura 2.5 (tabela 2.1 com RM)"

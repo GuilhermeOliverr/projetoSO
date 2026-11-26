@@ -1207,7 +1207,7 @@ ItemTeste *sim_itens_teste(const Estado *e, int *n) {
     int m = 0;
     for (int i = 0; i < e->n; i++) {
         const TCB *k = &e->tarefas[i];
-        if (k->estado != T_TERMINADA) v[m++] = (ItemTeste){k->tipo, k->srv, k->duracao, k->periodo};
+        if (k->estado != T_TERMINADA) v[m++] = (ItemTeste){k->tipo, k->srv, k->duracao, k->periodo, k->prazo, k->id};
     }
     *n = m;
     return v;
@@ -1218,7 +1218,7 @@ ItemTeste *sim_itens_teste(const Estado *e, int *n) {
 const char *sim_admitir_tarefa(const Estado *e, const TarefaCfg *t, char *buf, size_t tam) {
     int n;
     ItemTeste *v = sim_itens_teste(e, &n);
-    const char *m = teste_admitir(v, n, (ItemTeste){t->tipo, t->srv, t->duracao, t->periodo}, e->alg, e->ncpus, buf, tam);
+    const char *m = teste_admitir(v, n, (ItemTeste){t->tipo, t->srv, t->duracao, t->periodo, t->prazo, t->id}, e->alg, e->ncpus, buf, tam);
     free(v);
     return m;
 }
